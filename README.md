@@ -61,7 +61,7 @@ forge script script/DeployEscrow.s.sol --profile mezo --rpc-url mezo_testnet \
   --account <keystore-name> --sender <deployer-address> --broadcast
 ```
 
-`ESCROW_HUMAN_GATE=none` leaves funding open. The optional `HumanGate` contract can refuse new funding later. It never holds tokens and never touches a lease that is already funded.
+`ESCROW_HUMAN_GATE=none` leaves funding ungated on this escrow (a gate cannot be added later). A future deploy can pass a `HumanGate`; that gate never holds tokens and never touches a lease that is already funded.
 
 A successful broadcast adds a `mezoTestnet` entry to `deployments.json`. The `baseSepolia` key already in that file is a placeholder so the script's read-modify-write can be tested. It is not a live deployment.
 

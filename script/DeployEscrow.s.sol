@@ -82,7 +82,7 @@ contract DeployEscrow is Script {
         IVmForgeContext ctx = IVmForgeContext(address(vm));
         if (ctx.isContext(ForgeContext.ScriptBroadcast) || ctx.isContext(ForgeContext.ScriptResume)) {
             record(DEPLOYMENTS_FILE, deployer, token, arbiter, humanGate, address(escrow), address(shares));
-            console2.log("recorded", DEPLOYMENTS_FILE, "(sepolia)");
+            console2.log("recorded", DEPLOYMENTS_FILE, block.chainid == MEZO_TESTNET_CHAIN_ID ? "mezoTestnet" : "sepolia");
         } else {
             console2.log("no --broadcast: simulation only, deployments.json not written");
         }
