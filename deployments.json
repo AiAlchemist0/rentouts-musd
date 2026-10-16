@@ -5,5 +5,20 @@
       "address": "0x1111111111111111111111111111111111111111",
       "deployTx": "0x2222222222222222222222222222222222222222222222222222222222222222"
     }
+  },
+  "mezoTestnet": {
+    "arbiter": "0x6edaCc23181829E228427167bD22c0c199e9eF08",
+    "chainId": 31611,
+    "deployer": "0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6",
+    "humanGate": "0x0000000000000000000000000000000000000000",
+    "leaseShare1155": "0x2be778f3F3724b74fc64E49e05c848FcCB4e6Fb4",
+    "leaseShare1155Tx": "0xcc44fb198d6b6edba5c0ca4c9f3dfc904a9c54817f1b0317faba2a03bba21d72",
+    "rentEscrow": "0x25C37b5A05a21A743F04B455122f24aA55235047",
+    "rentEscrowTx": "0xb10e3e69327cec6481c97bcbaab98346fe92b0365736667070599c438541d1b2",
+    "setMinterTx": "0x8594c3e5abb8fe0c96f45d43478b862a0eac20b549643e9f11fdc63d733a209b",
+    "token": "0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503",
+    "explorer": "https://explorer.test.mezo.org",
+    "verified": "blockscout",
+    "status": "live"
   }
 }

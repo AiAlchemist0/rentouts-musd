@@ -19,7 +19,14 @@ Rent deposits and rent, paid in **MUSD** on Mezo testnet.
 
 MUSD is minted by borrowing against testnet BTC (`BorrowerOperations.openTrove`), or by swapping inside https://testnet.mezo.org. ABIs for those public contracts are in `.mezo/`.
 
-The escrow address will be added here after the testnet deploy.
+Live `mezoTestnet` (verified on the explorer):
+
+| Contract | Address |
+|---|---|
+| RentEscrow | [`0x25C37b5A05a21A743F04B455122f24aA55235047`](https://explorer.test.mezo.org/address/0x25C37b5A05a21A743F04B455122f24aA55235047) |
+| LeaseShare1155 | [`0x2be778f3F3724b74fc64E49e05c848FcCB4e6Fb4`](https://explorer.test.mezo.org/address/0x2be778f3F3724b74fc64E49e05c848FcCB4e6Fb4) |
+| Arbiter | `0x6edaCc23181829E228427167bD22c0c199e9eF08` |
+| Human gate | none |
 
 ## Run the tests
 
