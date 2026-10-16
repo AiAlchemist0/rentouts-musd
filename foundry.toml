@@ -1,0 +1,32 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/openzeppelin-contracts/lib/forge-std/src/",
+]
+fs_permissions = [
+    { access = "read-write", path = "./deployments.json" },
+    { access = "read-write", path = "./cache/deploy-escrow-test" },
+]
+
+[invariant]
+runs = 64
+depth = 256
+fail_on_revert = true
+
+[rpc_endpoints]
+mezo_testnet = "https://rpc.test.mezo.org"
+
+[etherscan]
+mezo_testnet = { key = "mezo", url = "https://api.explorer.test.mezo.org/api" }
+
+# Mezo testnet predates Shanghai, so deploy with: forge script --profile mezo
+[profile.mezo]
+evm_version = "london"
