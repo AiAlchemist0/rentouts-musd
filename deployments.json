@@ -29,6 +29,10 @@
     "closeLeaseTx": "0x0ca9fcd7661273512c8fffd0a708d51a817a0fe6878e4ef4396c62eb1cb71c87",
     "activeLeaseId": 2,
     "activeLeaseCreateTx": "0x2f0dd40f50ad94a28935af4acdc7802d59fd28bfa3df51a1d1d40a960ce7c9f7",
-    "activeLeaseFundTx": "0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532"
+    "activeLeaseFundTx": "0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532",
+    "demoLandlord": "0x6621dE90776302aD1a3C0190141f9169B4A0112B",
+    "demoLandlordTx": "0x1541f38fb8d54b25c6a8fd0c733da297491abb37e4800dcf79c29a39b8e4c4cf",
+    "demoLandlordAllowlistTx": "0xc544adf99266b66b05adef74e1592d867deb07a4a0984cd172c1fafb1260d32a",
+    "demoLandlordTerms": "20 MUSD deposit, 10 MUSD / 60s x 3"
   }
 }
