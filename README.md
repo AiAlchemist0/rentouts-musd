@@ -68,32 +68,30 @@ No wallet? **Run the lease** shows lease #2 (800 MUSD prepaid, 50 MUSD released 
 ### System map
 
 ```mermaid
-flowchart TB
+flowchart LR
     T(["Tenant<br/>holds BTC"])
-
-    subgraph MB["Mezo Borrow"]
-        BO["BorrowerOperations<br/>openTrove · withdrawMUSD"]
-    end
-
+    BO["Mezo Borrow<br/>BorrowerOperations<br/>openTrove · withdrawMUSD"]
     M[("MUSD<br/>Bitcoin-backed dollar")]
-
-    subgraph RO["RentOuts on Mezo"]
-        ESC["RentEscrow<br/>holds deposit + all rent<br/>no admin · no fee"]
-        LS["LeaseShare1155<br/>100 shares per lease"]
-        DL["DemoLandlord<br/>rents to anyone"]
-    end
-
+    ESC["RentEscrow<br/>holds deposit + all rent<br/>no admin · no fee"]
     L(["Landlord"])
+    T2(["Tenant<br/>at move-out"])
+    LS["LeaseShare1155<br/>100 shares per lease"]
+    DL["DemoLandlord<br/>rents to anyone"]
     ARB(["Arbiter<br/>disputes only"])
 
     T -->|"1 · lock BTC"| BO
-    BO -->|"2 · mint MUSD to the tenant"| M
-    M -->|"3 · fundLease: deposit + all rent"| ESC
-    ESC -->|"4 · claimRent, each period"| L
-    ESC -->|"5 · closeLease: deposit back"| T
-    ESC -->|"shares on createLease"| LS
-    DL -->|"createLease for any tenant"| ESC
-    ARB -.->|"resolveDispute: split what is left"| ESC
+    BO -->|"2 · mint MUSD"| M
+    M -->|"3 · fundLease<br/>deposit + all rent"| ESC
+    ESC -->|"4 · claimRent<br/>each period"| L
+    ESC -->|"5 · closeLease<br/>deposit back"| T2
+    DL -->|"createLease"| ESC
+    ESC -->|"shares"| LS
+    ARB -.->|"resolveDispute"| ESC
+
+    classDef mezo fill:#fff4e0,stroke:#d08a1e,color:#5a3a00
+    classDef ro fill:#e6f5ee,stroke:#1f8a5b,color:#0b3d27
+    class BO,M mezo
+    class ESC,LS,DL ro
 ```
 
 The app at mezo.rentouts.co reads Mezo’s price feed and trove data, and every transaction is signed in the user’s own wallet.
@@ -113,7 +111,7 @@ sequenceDiagram
 
     Tenant->>DL: requestLease()
     DL->>Escrow: createLease(tenant, 20, 10, 60s, 3)
-    Escrow-->>DL: lease #n + 100 LeaseShare1155 shares
+    Escrow-->>DL: new lease n, 100 LeaseShare1155 shares
     App->>Mezo: fetchPrice, MCR, fee, hints
     Tenant->>Mezo: openTrove(1,800 MUSD) with BTC (or withdrawMUSD)
     Mezo->>MUSD: mint to tenant
