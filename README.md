@@ -68,40 +68,35 @@ No wallet? **Run the lease** shows lease #2 (800 MUSD prepaid, 50 MUSD released 
 ### System map
 
 ```mermaid
-flowchart LR
-    T(["Tenant wallet<br/>BTC"])
-    L(["Landlord"])
-    APP["RentOuts app<br/>mezo.rentouts.co"]
+flowchart TB
+    T(["Tenant<br/>holds BTC"])
 
-    subgraph MEZO["Mezo testnet (chain 31611)"]
-        direction TB
-        subgraph BORROW["Mezo Borrow"]
-            BO["BorrowerOperations<br/>openTrove · withdrawMUSD"]
-            PF["PriceFeed"]
-            HH["HintHelpers + SortedTroves"]
-        end
-        MUSD[("MUSD<br/>Bitcoin-backed dollar")]
-        subgraph RO["RentOuts contracts"]
-            ESC["RentEscrow<br/>token = MUSD, no admin, no fee"]
-            LS["LeaseShare1155<br/>100 shares per lease"]
-            DL["DemoLandlord"]
-        end
-        ARB(["Arbiter<br/>disputes only"])
+    subgraph MB["Mezo Borrow"]
+        BO["BorrowerOperations<br/>openTrove · withdrawMUSD"]
     end
 
-    T -- "1 · lock BTC" --> BO
-    BO -- "mints" --> MUSD
-    MUSD -- "2 · MUSD to tenant" --> T
-    T -- "3 · approve + fundLease<br/>deposit + all rent" --> ESC
-    ESC -- "4 · claimRent, each period" --> L
-    ESC -- "5 · closeLease: deposit back" --> T
-    ESC -- "mint on createLease" --> LS
-    DL -- "createLease for any tenant" --> ESC
-    ARB -. "resolveDispute: split what is left" .-> ESC
-    APP -. "reads price, ratio, hints" .-> PF
-    APP -. "reads" .-> HH
-    APP -. "signs via wallet" .-> T
+    M[("MUSD<br/>Bitcoin-backed dollar")]
+
+    subgraph RO["RentOuts on Mezo"]
+        ESC["RentEscrow<br/>holds deposit + all rent<br/>no admin · no fee"]
+        LS["LeaseShare1155<br/>100 shares per lease"]
+        DL["DemoLandlord<br/>rents to anyone"]
+    end
+
+    L(["Landlord"])
+    ARB(["Arbiter<br/>disputes only"])
+
+    T -->|"1 · lock BTC"| BO
+    BO -->|"2 · mint MUSD to the tenant"| M
+    M -->|"3 · fundLease: deposit + all rent"| ESC
+    ESC -->|"4 · claimRent, each period"| L
+    ESC -->|"5 · closeLease: deposit back"| T
+    ESC -->|"shares on createLease"| LS
+    DL -->|"createLease for any tenant"| ESC
+    ARB -.->|"resolveDispute: split what is left"| ESC
 ```
+
+The app at mezo.rentouts.co reads Mezo’s price feed and trove data, and every transaction is signed in the user’s own wallet.
 
 ### One lease, end to end
 
