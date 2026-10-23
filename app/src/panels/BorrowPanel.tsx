@@ -10,11 +10,13 @@ import { totalDue } from '../lib/lease'
 import { formatRounded, formatToken, parseToken } from '../lib/format'
 import { walletReadQuery } from '../lib/polling'
 import {
+  bestRatioFor,
   collateralFor,
   collateralRatio,
   compositeDebt,
   headroom,
   liquidationPrice,
+  maxNewBorrow,
   ONE,
   percentRatio,
   ratioPercent,
@@ -23,6 +25,8 @@ import {
 import { demoChain } from '../network'
 
 const RATIO_CHOICES = [160, 200, 250] as const
+/** BTC left in the wallet for gas when sizing a trove. */
+const GAS_KEEP = 200_000_000_000_000n // 0.0002 BTC
 const MEZO_APP = 'https://testnet.mezo.org'
 
 /** "0.05505" BTC, four to six significant decimals. */
@@ -75,15 +79,24 @@ function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | un
   const { ready } = useWallet()
   const tx = useTx()
   const minBorrow = Number(protocol.minNetDebt / ONE)
-  const [amount, setAmount] = useState(String(Math.max(2000, minBorrow)))
-  const [percent, setPercent] = useState<number>(200)
+  const [amount, setAmount] = useState(String(minBorrow))
+  // Until the user picks a ratio, use the safest one the wallet's BTC can carry (Mezo's faucet sends 0.05 BTC).
+  const [picked, setPicked] = useState<number | null>(null)
 
   const borrow = parseToken(amount, 18)
+  const spendable = btc !== undefined && btc > GAS_KEEP ? btc - GAS_KEEP : 0n
+  const fitting =
+    btc !== undefined && borrow !== null
+      ? bestRatioFor(borrow, spendable, protocol.price, protocol.borrowingRate, protocol.gasCompensation, RATIO_CHOICES)
+      : undefined
+  const percent = picked ?? fitting ?? 200
+  const maxBorrow = btc !== undefined ? maxNewBorrow(spendable, protocol.price, percentRatio(percent), protocol.borrowingRate, protocol.gasCompensation) : 0n
+  const maxWhole = maxBorrow - (maxBorrow % ONE)
   const fee = borrow !== null ? (borrow * protocol.borrowingRate) / ONE : 0n
   const debt = borrow !== null ? compositeDebt(borrow, fee, protocol.gasCompensation) : 0n
   const coll = borrow !== null ? collateralFor(debt, percentRatio(percent), protocol.price) : 0n
   const tooSmall = borrow !== null && borrow < protocol.minNetDebt
-  const short = btc !== undefined && coll > btc
+  const short = btc !== undefined && coll > spendable
   const valid = borrow !== null && borrow > 0n && !tooSmall
 
   async function onSubmit(event: FormEvent) {
@@ -105,7 +118,25 @@ function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | un
   return (
     <form className="stack" onSubmit={onSubmit}>
       <div className="grid-2">
-        <Field label="MUSD to borrow" htmlFor="borrow-amount" hint={`Mezo’s minimum is ${minBorrow.toLocaleString('en-US')} MUSD.`}>
+        <Field
+          label="MUSD to borrow"
+          htmlFor="borrow-amount"
+          hint={
+            <>
+              Mezo’s minimum is {minBorrow.toLocaleString('en-US')} MUSD.
+              {maxWhole >= protocol.minNetDebt ? (
+                <>
+                  {' '}
+                  Your BTC carries up to{' '}
+                  <button type="button" className="linkish" onClick={() => setAmount(formatUnits(maxWhole, 18))}>
+                    {formatToken(maxWhole, 18)} MUSD
+                  </button>{' '}
+                  at {percent}%.
+                </>
+              ) : null}
+            </>
+          }
+        >
           <input id="borrow-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
         <div className="field">
@@ -119,13 +150,16 @@ function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | un
                 type="button"
                 className={`chip${percent === p ? ' chip-on' : ''}`}
                 aria-pressed={percent === p}
-                onClick={() => setPercent(p)}
+                onClick={() => setPicked(p)}
               >
-                {p}%{p === 200 ? ' · suggested' : ''}
+                {p}%
               </button>
             ))}
           </div>
-          <div className="hint">Higher is safer: the BTC price can fall further before the trove is at risk.</div>
+          <div className="hint">
+            {picked === null && fitting !== undefined ? 'The safest ratio your BTC can carry. ' : ''}
+            Higher is safer: the BTC price can fall further before the trove is at risk.
+          </div>
         </div>
       </div>
 
@@ -165,7 +199,8 @@ function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | un
 
       {short ? (
         <Notice tone="warn">
-          This needs {formatBtc(coll)} BTC and the wallet holds {formatBtc(btc!)}. Get testnet BTC from{' '}
+          This needs {formatBtc(coll)} BTC and the wallet holds {formatBtc(btc!)} (a little stays back for gas). Get
+          testnet BTC from{' '}
           <ExtLink href="https://faucet.test.mezo.org">Mezo’s faucet</ExtLink>, or pick a lower ratio.
         </Notice>
       ) : null}

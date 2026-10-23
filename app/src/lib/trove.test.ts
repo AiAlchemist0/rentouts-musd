@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bestRatioFor,
   btcFor,
   collateralFor,
   collateralRatio,
   compositeDebt,
   headroom,
   liquidationPrice,
+  maxNewBorrow,
   ONE,
   percentRatio,
   ratioPercent,
@@ -58,5 +60,29 @@ describe('trove math', () => {
   it('round-trips percentages', () => {
     expect(ratioPercent(percentRatio(160))).toBe(160)
     expect(percentRatio(110)).toBe(1_100_000_000_000_000_000n)
+  })
+})
+
+describe('fitting a new trove to the wallet', () => {
+  const rate = ONE / 1000n // 0.1%
+  const gas = musd(200)
+  const faucet = 50_000_000_000_000_000n // 0.05 BTC, what Mezo's faucet sends
+
+  it('finds the most a wallet can borrow at a ratio', () => {
+    // 0.05 BTC * 80k = 4,000 USD; at 200% that carries 2,000 debt; minus 200 reserve = 1,800 / 1.001
+    const max = maxNewBorrow(faucet, price, percentRatio(200), rate, gas)
+    expect(max).toBe((musd(1800) * ONE) / (ONE + rate))
+    const debt = compositeDebt(max, (max * rate) / ONE, gas)
+    expect(collateralFor(debt, percentRatio(200), price) <= faucet).toBe(true)
+  })
+
+  it('returns zero when the BTC cannot cover the gas reserve', () => {
+    expect(maxNewBorrow(1_000_000_000_000_000n, price, percentRatio(200), rate, gas)).toBe(0n)
+  })
+
+  it('picks the safest ratio the faucet amount allows for the 1,800 MUSD minimum', () => {
+    expect(bestRatioFor(musd(1800), faucet, price, rate, gas, [160, 200, 250])).toBe(160)
+    expect(bestRatioFor(musd(1800), ONE, price, rate, gas, [160, 200, 250])).toBe(250)
+    expect(bestRatioFor(musd(1800), ONE / 100n, price, rate, gas, [160, 200, 250])).toBeUndefined()
   })
 })

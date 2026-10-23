@@ -75,6 +75,22 @@ Live `mezoTestnet` (source verified on Sourcify, exact match):
 
 Full log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 
+## Limitations (honest list)
+
+**Getting MUSD takes real BTC.** Mezo's minimum trove is 1,800 MUSD (plus a 0.1% fee and a 200 MUSD gas reserve that comes back when the trove closes). At about $81k per BTC that needs roughly 0.037 BTC at 150% and 0.049 BTC at 200%: about $3,000–4,000 of BTC, even for a small lease. Mezo's testnet faucet gives 0.05 BTC, which the app sizes for. Mezo charges 1% a year on the trove. Already holding MUSD skips all of this.
+
+**The whole lease is prepaid.** `RentEscrow` takes the deposit and every period's rent in one transaction. That is what makes rent impossible to miss for the landlord, but a 12-month, $2,000 lease means 26,000 MUSD up front (about 0.64 BTC at 200%).
+
+**The tenant carries the BTC price risk, the landlord does not.** The BTC is in the tenant's own Mezo trove, not in the escrow: RentOuts and the landlord cannot touch it, and the tenant can repay and withdraw it at any time. What protects the landlord is the MUSD already in escrow. If BTC falls far enough, the tenant's trove can be liquidated or redeemed against, but the lease keeps paying the landlord.
+
+**Breaking a lease goes through a dispute.** There is no mutual early termination yet. A tenant who moves out early, a landlord who needs the unit back, or a unit that is not as promised: either side opens a dispute, which freezes what is left in escrow until the arbiter splits it. Rent already released stays released; damage beyond what is left in escrow is not covered on-chain. A dispute has no timeout, so the arbiter must stay available (one key on testnet; a multisig is planned).
+
+**Local rules on deposits and prepaid rent vary.** Some jurisdictions cap deposits or prepaid rent, or require deposits held in trust with interest. A production lease has to fit the local rules; this testnet escrow does not check them.
+
+**Testnet, not audited.** No real funds, no external audit yet. `DemoLandlord` exists only so one wallet can try the tenant side.
+
+**Next (Wave 2):** pay monthly instead of prepaying the whole term (deposit plus the next period, topped up as it goes), mutual early termination with an agreed penalty, a dispute timeout, and borrow-and-pay in one transaction.
+
 ## Run the tests
 
 [Foundry](https://book.getfoundry.sh/) is required.

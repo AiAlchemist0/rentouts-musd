@@ -61,3 +61,27 @@ export const TroveStatus = {
   closedByLiquidation: 3,
   closedByRedemption: 4,
 } as const
+
+/**
+ * Most MUSD a new trove can borrow with `coll` BTC at `ratio`, after the one-time fee and the gas reserve:
+ * coll * price / ratio = borrow * (1 + rate) + gasCompensation. Zero when the BTC can't cover the reserve.
+ */
+export function maxNewBorrow(coll: bigint, price: bigint, ratio: bigint, borrowingRate: bigint, gasCompensation: bigint): bigint {
+  if (ratio === 0n) return 0n
+  const maxDebt = (coll * price) / ratio
+  if (maxDebt <= gasCompensation) return 0n
+  return ((maxDebt - gasCompensation) * ONE) / (ONE + borrowingRate)
+}
+
+/** The safest of `percents` (highest first) at which `coll` BTC can carry `borrow` MUSD, or undefined. */
+export function bestRatioFor(
+  borrow: bigint,
+  coll: bigint,
+  price: bigint,
+  borrowingRate: bigint,
+  gasCompensation: bigint,
+  percents: readonly number[],
+): number | undefined {
+  const debt = compositeDebt(borrow, (borrow * borrowingRate) / ONE, gasCompensation)
+  return [...percents].sort((a, b) => b - a).find((p) => collateralFor(debt, percentRatio(p), price) <= coll)
+}
