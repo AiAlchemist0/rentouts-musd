@@ -6,6 +6,10 @@ Rent deposits and rent, paid in **MUSD** on Mezo testnet.
 
 `RentEscrow` takes its settlement token in the constructor. MUSD is that token. The contract does not hold admin keys, does not take a fee, and cannot be upgraded. A tenant prepays the deposit and the rent. Rent unlocks to the landlord one period at a time. At the end, the deposit comes back to the tenant.
 
+## Try it
+
+**Live app:** https://mezo.rentouts.co — create a lease, pay deposit and rent in MUSD, watch rent unlock, close and get the deposit back. Lease #2 is running on the live escrow, so the *Run the lease* tab shows it without a wallet. Source and steps: [`app/`](app/README.md).
+
 ## Network
 
 | | |
@@ -19,13 +23,13 @@ Rent deposits and rent, paid in **MUSD** on Mezo testnet.
 
 MUSD is minted by borrowing against testnet BTC (`BorrowerOperations.openTrove`), or by swapping inside https://testnet.mezo.org. ABIs for those public contracts are in `.mezo/`.
 
-Live `mezoTestnet` (verified on the explorer):
+Live `mezoTestnet` (source verified on Sourcify, exact match):
 
 | Contract | Address |
 |---|---|
-| RentEscrow | [`0x25C37b5A05a21A743F04B455122f24aA55235047`](https://explorer.test.mezo.org/address/0x25C37b5A05a21A743F04B455122f24aA55235047) |
-| LeaseShare1155 | [`0x2be778f3F3724b74fc64E49e05c848FcCB4e6Fb4`](https://explorer.test.mezo.org/address/0x2be778f3F3724b74fc64E49e05c848FcCB4e6Fb4) |
-| Arbiter | `0x6edaCc23181829E228427167bD22c0c199e9eF08` |
+| RentEscrow | [`0xA9f09366991E6df87855F4B99025911790d4C3aF`](https://explorer.test.mezo.org/address/0xA9f09366991E6df87855F4B99025911790d4C3aF) |
+| LeaseShare1155 | [`0xfE8bF13ed62A473277d841b0DEDf7720C3DBc820`](https://explorer.test.mezo.org/address/0xfE8bF13ed62A473277d841b0DEDf7720C3DBc820) |
+| Arbiter | `0x1da334A5FaB59a741fDAE7f081c7f592027b3106` |
 | Human gate | none |
 
 **Lease #1** (closed): 20 MUSD deposit, 10 MUSD / 60s × 2 periods. Landlord claimed one period; tenant closed and got the deposit back.
@@ -33,10 +37,17 @@ Live `mezoTestnet` (verified on the explorer):
 | Step | Tx |
 |---|---|
 | Mint 2000 MUSD (`openTrove`) | [`0x037283b2…917b`](https://explorer.test.mezo.org/tx/0x037283b2380752c8ce1c58df1a11ebd0e2a3c8b8ca3316d2b50905ef5466917b) |
-| createLease | [`0x6c2f52f1…b526`](https://explorer.test.mezo.org/tx/0x6c2f52f151492e8134c97a9bac55dc1bc3f7b27f33d7bde16e2132b9cb09b526) |
-| fundLease | [`0x7b775b10…4e55`](https://explorer.test.mezo.org/tx/0x7b775b105199f4e3a9ae37a59891b224e1f3f11c58ed2d32167dcdd3f34c4e55) |
-| claimRent | [`0x25eec87c…2876`](https://explorer.test.mezo.org/tx/0x25eec87ca931c6352828dee4757519a9aabcc975664e14b18924e87f45df2876) |
-| closeLease | [`0xe10dc5cd…fd84`](https://explorer.test.mezo.org/tx/0xe10dc5cd704756b2b2124ac7853878b87a5ff27d497348f69f8833228b54fd84) |
+| createLease | [`0x5c819992…92ed`](https://explorer.test.mezo.org/tx/0x5c8199923d447762e3328682c0018834a393ba369b8932d6b513f751184a92ed) |
+| fundLease | [`0x3bd42097…9690`](https://explorer.test.mezo.org/tx/0x3bd42097117b0277f2d44e90bcc07ab757c0c1e5c0d95fbd49995602eaa89690) |
+| claimRent | [`0xe3dddf8d…02ef`](https://explorer.test.mezo.org/tx/0xe3dddf8d66a9a19c3fe675b2ce524a230a33c34b951409ea6394645db63302ef) |
+| closeLease | [`0x0ca9fcd7…1c87`](https://explorer.test.mezo.org/tx/0x0ca9fcd7661273512c8fffd0a708d51a817a0fe6878e4ef4396c62eb1cb71c87) |
+
+**Lease #2** (active until 6 Nov 2026): 100 MUSD deposit, 50 MUSD / day × 14 periods, 800 MUSD prepaid. Rent unlocks to the landlord one day at a time; read it live with `getLease(2)` and `claimable(2)`.
+
+| Step | Tx |
+|---|---|
+| createLease | [`0x2f0dd40f…c9f7`](https://explorer.test.mezo.org/tx/0x2f0dd40f50ad94a28935af4acdc7802d59fd28bfa3df51a1d1d40a960ce7c9f7) |
+| fundLease | [`0xd1d5088b…6532`](https://explorer.test.mezo.org/tx/0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532) |
 
 Full log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 
