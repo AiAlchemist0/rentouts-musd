@@ -1,13 +1,14 @@
-import type { Address } from 'viem'
+import { useState } from 'react'
+import type { Address, Hash } from 'viem'
 import { useBalance, useReadContract } from 'wagmi'
 import { erc20Abi } from '../abi/erc20'
-import { demoChain, gasLabel, isMezo } from '../network'
+import { demoChain, explorerLabel, gasLabel, isMezo } from '../network'
 import { LeaseState, rentEscrowAbi } from '../abi/rentEscrow'
 import { AddressLink, Empty, ExtLink, NotConfigured, Notice, TxStatus } from '../components/ui'
 import { useContracts, useHumanGate, useLeases, useMezoProtocol, useRentoutsName, useRentoutsNames, useTx, useWallet, type LeaseRow } from '../hooks'
 import { btcFor } from '../lib/trove'
 import { formatBtc } from './BorrowPanel'
-import { formatDuration, formatToken } from '../lib/format'
+import { formatDuration, formatToken, txUrl } from '../lib/format'
 import { humanGateNotice } from '../lib/humanGate'
 import { walletReadQuery } from '../lib/polling'
 import { totalDue } from '../lib/lease'
@@ -17,12 +18,15 @@ function FundRow({
   account,
   balance,
   gated,
+  onFunded,
 }: {
   lease: LeaseRow
   account: Address
   balance: bigint | undefined
   /** The escrow's human gate rejects this wallet, so fundLease would revert. */
   gated: boolean
+  /** Called once fundLease confirms; the row leaves the waiting list on the next refresh. */
+  onFunded: (leaseId: bigint, hash: Hash) => void
 }) {
   const { escrow, token, tokenDecimals, tokenSymbol } = useContracts()
   const nameOf = useRentoutsNames([lease.landlord])
@@ -70,9 +74,13 @@ function FundRow({
           type="button"
           className="btn btn-primary"
           disabled={!approved || !enough || fundTx.busy || gated}
-          onClick={() =>
-            fundTx.run({ address: escrow!, abi: rentEscrowAbi, functionName: 'fundLease', args: [lease.id] }, `Fund lease #${lease.id}`)
-          }
+          onClick={async () => {
+            const receipt = await fundTx.run(
+              { address: escrow!, abi: rentEscrowAbi, functionName: 'fundLease', args: [lease.id] },
+              `Fund lease #${lease.id}`,
+            )
+            if (receipt) onFunded(lease.id, receipt.transactionHash)
+          }}
         >
           {isMezo ? 'Pay rent in MUSD — Bitcoin-backed' : 'Fund lease'}
         </button>
@@ -98,6 +106,7 @@ export function FundPanel() {
   const { escrow, token, tokenDecimals, tokenSymbol, escrowError } = useContracts()
   const { address, isConnected } = useWallet()
   const { data: myName } = useRentoutsName(address)
+  const [funded, setFunded] = useState<{ id: bigint; hash: Hash } | null>(null)
   const leases = useLeases(escrow)
   const { data: balance } = useReadContract({
     address: token,
@@ -153,6 +162,12 @@ export function FundPanel() {
       </p>
 
       {escrowError ? <Notice tone="error">{escrowError}</Notice> : null}
+      {funded ? (
+        <Notice tone="ok">
+          <strong>Lease #{String(funded.id)} funded.</strong> Rent starts unlocking now:{' '}
+          <a href="#run">follow it under Run the lease</a>. <ExtLink href={txUrl(funded.hash)}>View on {explorerLabel}</ExtLink>
+        </Notice>
+      ) : null}
       {gate ? (
         <Notice tone={gate.tone}>
           <strong>{gate.title}</strong>. {gate.detail}
@@ -177,7 +192,14 @@ export function FundPanel() {
       ) : (
         <ul className="list">
           {waiting.map((lease) => (
-            <FundRow key={String(lease.id)} lease={lease} account={address} balance={balance} gated={!!gate?.blocksFunding} />
+            <FundRow
+              key={String(lease.id)}
+              lease={lease}
+              account={address}
+              balance={balance}
+              gated={!!gate?.blocksFunding}
+              onFunded={(id, hash) => setFunded({ id, hash })}
+            />
           ))}
         </ul>
       )}
