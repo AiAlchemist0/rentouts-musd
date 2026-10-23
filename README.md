@@ -6,6 +6,8 @@
 
 `RentEscrow` takes its settlement token in the constructor. MUSD is that token. The contract does not hold admin keys, does not take a fee, and cannot be upgraded. A tenant prepays the deposit and the rent. Rent unlocks to the landlord one period at a time. At the end, the deposit comes back to the tenant.
 
+![RentOuts on Mezo: keep your bitcoin, pay your rent](docs/img/home.png)
+
 ## Try it
 
 **Live app: https://mezo.rentouts.co** — one wallet is enough:
@@ -15,7 +17,13 @@
 3. **Pay in MUSD**: approve, then prepay the deposit and every period’s rent into the escrow.
 4. **Run the lease**: rent releases to the landlord period by period; after the term, close it and the deposit comes back.
 
-Lease #2 is running on the live escrow until 6 Nov, so *Run the lease* shows rent unlocking without a wallet. Source and steps: [`app/`](app/README.md).
+Lease #2 is running on the live escrow until 6 Nov, so *Run the lease* shows rent unlocking without a wallet.
+
+| Borrow MUSD against BTC (Mezo Borrow) | A live lease, releasing rent daily |
+|---|---|
+| ![Borrow step](docs/img/borrow.png) | ![Lease #2](docs/img/live-lease.png) |
+
+Source and steps: [`app/`](app/README.md).
 
 ## How MUSD is used
 
