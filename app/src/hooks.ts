@@ -183,6 +183,29 @@ type WriteParams<
 }
 
 /**
+ * Polls for a receipt every 1.5 s. Mezo's public RPC is load-balanced and some backends answer null for a
+ * mined transaction for a while, so a null (or a failed call) just means "ask again".
+ */
+export async function waitForReceipt(
+  client: Pick<ReturnType<typeof useDemoClient>, 'getTransactionReceipt'>,
+  hash: Hash,
+  timeoutMs = 180_000,
+  intervalMs = 1500,
+): Promise<TransactionReceipt> {
+  const until = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      const receipt = await client.getTransactionReceipt({ hash })
+      if (receipt) return receipt
+    } catch {
+      // not found yet, or a backend hiccup
+    }
+    if (Date.now() > until) throw new Error('No receipt yet. The transaction may still confirm: check it on the explorer.')
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+}
+
+/**
  * simulate -> sign -> wait, with one status for the UI. The simulation runs first so reverts show up
  * as a readable message before MetaMask opens. Every query is refetched after a confirmed transaction.
  */
@@ -219,7 +242,7 @@ export function useTx() {
         } as unknown as Parameters<typeof writeContractAsync>[0])
         setState({ status: 'pending', hash })
         recordTx({ hash, label, status: 'pending' })
-        const receipt = await client.waitForTransactionReceipt({ hash })
+        const receipt = await waitForReceipt(client, hash)
         recordTx({ hash, label, status: receipt.status === 'success' ? 'success' : 'reverted' })
         if (receipt.status !== 'success') throw new Error('The transaction reverted on-chain.')
         setState({ status: 'success', hash })

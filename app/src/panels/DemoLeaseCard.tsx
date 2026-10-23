@@ -39,7 +39,8 @@ export function DemoLeaseCard() {
 
 function DemoLease({ demo }: { demo: Address }) {
   const { tokenDecimals, tokenSymbol } = useContracts()
-  const { ready } = useWallet()
+  const { address, ready } = useWallet()
+  const client = useDemoClient()
   const terms = useDemoTerms(demo)
   const tx = useTx()
   const [leaseId, setLeaseId] = useState<bigint | null>(null)
@@ -51,7 +52,14 @@ function DemoLease({ demo }: { demo: Address }) {
     if (receipt) {
       const [created] = parseEventLogs({ abi: demoLandlordAbi, eventName: 'DemoLeaseCreated', logs: receipt.logs })
       // No event: the tenant already had an unfunded demo lease, which requestLease returned instead.
-      setLeaseId(created?.args.leaseId ?? -1n)
+      const id =
+        created?.args.leaseId ??
+        (address
+          ? await client
+              .readContract({ address: demo, abi: demoLandlordAbi, functionName: 'lastLeaseOf', args: [address] })
+              .catch(() => undefined)
+          : undefined)
+      setLeaseId(id ?? -1n)
     }
   }
 

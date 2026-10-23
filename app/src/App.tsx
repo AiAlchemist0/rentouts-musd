@@ -55,6 +55,8 @@ function useStep(): StepId {
       if (nav && top !== undefined && (top < 0 || top > window.innerHeight * 0.6)) {
         nav.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }
+      // On narrow screens the step list scrolls sideways: keep the current step visible.
+      requestAnimationFrame(() => document.querySelector('.step-on')?.scrollIntoView({ block: 'nearest', inline: 'center' }))
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)

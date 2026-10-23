@@ -4,7 +4,9 @@ import { useBalance, useReadContract } from 'wagmi'
 import { borrowerOperationsAbi, MEZO_BORROW } from '../abi/mezo'
 import { erc20Abi } from '../abi/erc20'
 import { ExtLink, Field, Notice, TxStatus } from '../components/ui'
-import { troveHints, useContracts, useDemoClient, useMezoProtocol, useTrove, useTx, useWallet, type MezoProtocol, type Trove } from '../hooks'
+import { troveHints, useContracts, useDemoClient, useLeases, useMezoProtocol, useTrove, useTx, useWallet, type MezoProtocol, type Trove } from '../hooks'
+import { LeaseState } from '../abi/rentEscrow'
+import { totalDue } from '../lib/lease'
 import { formatRounded, formatToken, parseToken } from '../lib/format'
 import { walletReadQuery } from '../lib/polling'
 import {
@@ -292,6 +294,31 @@ function BorrowMore({ protocol, trove }: { protocol: MezoProtocol; trove: Trove 
   )
 }
 
+/** What the tenant's unfunded leases need, against the MUSD the wallet holds. */
+function WaitingLeases({ musd }: { musd: bigint | undefined }) {
+  const { escrow } = useContracts()
+  const { address } = useWallet()
+  const leases = useLeases(escrow)
+  if (!address || musd === undefined) return null
+  const waiting = (leases.data ?? []).filter(
+    (l) => l.state === LeaseState.CREATED && l.tenant.toLowerCase() === address.toLowerCase(),
+  )
+  if (waiting.length === 0) return null
+  const need = waiting.reduce((sum, l) => sum + totalDue(l.deposit, l.rentPerPeriod, l.periods), 0n)
+  const label = waiting.length === 1 ? `Lease #${waiting[0].id}` : `Your ${waiting.length} waiting leases`
+  return musd >= need ? (
+    <Notice tone="ok">
+      {label} needs {formatRounded(need, 18)} MUSD and you hold {formatRounded(musd, 18)}. You have enough:{' '}
+      <a href="#fund">pay it now</a>.
+    </Notice>
+  ) : (
+    <Notice tone="warn">
+      {label} needs {formatRounded(need, 18)} MUSD and you hold {formatRounded(musd, 18)}. Borrow at least{' '}
+      {formatRounded(need - musd, 18)} MUSD below.
+    </Notice>
+  )
+}
+
 export function BorrowPanel() {
   const { token } = useContracts()
   const { address, isConnected } = useWallet()
@@ -319,6 +346,8 @@ export function BorrowPanel() {
 
       {protocol.isError ? <Notice tone="error">Couldn’t read Mezo Borrow. The testnet RPC may be busy; this retries.</Notice> : null}
       {protocol.data ? <ProtocolStrip protocol={protocol.data} btc={btc?.value} musd={musd} /> : <p className="hint">Reading Mezo Borrow…</p>}
+
+      <WaitingLeases musd={musd} />
 
       {!isConnected ? (
         <Notice>
