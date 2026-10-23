@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { isAddressEqual, type Address } from 'viem'
+import { getAddress, isAddressEqual, type Address } from 'viem'
 import { Header, NetworkGuard } from './components/Header'
 import { AddressLink, ExtLink } from './components/ui'
-import { ENS } from './config'
+import { DEMO_LANDLORD, ENS } from './config'
+import { MEZO_BORROW } from './abi/mezo'
 import { explorerLabel, isMezo } from './network'
 import { useAiArbiter, useContracts, useHumanGate } from './hooks'
 import { txUrl } from './lib/format'
@@ -12,17 +13,30 @@ import { FundPanel } from './panels/FundPanel'
 import { IdentityPanel } from './panels/IdentityPanel'
 import { LeasesPanel } from './panels/LeasesPanel'
 import { SharesPanel } from './panels/SharesPanel'
+import { BorrowPanel } from './panels/BorrowPanel'
+import { MezoHero } from './components/MezoHero'
 
-const ALL_STEPS = [
+type Step = { id: string; title: string; who: string; panel: () => ReactNode }
+
+const SEPOLIA_STEPS: readonly Step[] = [
   { id: 'identity', title: 'Claim your name', who: 'Tenant', panel: IdentityPanel },
   { id: 'create', title: 'Create a lease', who: 'Landlord', panel: CreateLeasePanel },
   { id: 'fund', title: 'Fund the lease', who: 'Tenant', panel: FundPanel },
-  { id: 'run', title: 'Run the lease', who: isMezo ? 'Landlord and tenant' : 'Both, plus the AI judge', panel: LeasesPanel },
+  { id: 'run', title: 'Run the lease', who: 'Both, plus the AI judge', panel: LeasesPanel },
   { id: 'shares', title: 'Lease shares', who: 'Landlord', panel: SharesPanel },
-] as const
-type StepId = (typeof ALL_STEPS)[number]['id']
-/** ENS names live on Sepolia, so the Mezo build starts at Create a lease. */
-const STEPS = isMezo ? ALL_STEPS.filter((s) => s.id !== 'identity') : ALL_STEPS
+]
+
+/** Mezo: no ENS step (names live on Sepolia); borrowing MUSD against BTC sits between the lease and paying it. */
+const MEZO_STEPS: readonly Step[] = [
+  { id: 'create', title: 'Get a lease', who: 'Tenant or landlord', panel: CreateLeasePanel },
+  { id: 'borrow', title: 'Borrow MUSD', who: 'Tenant, against BTC', panel: BorrowPanel },
+  { id: 'fund', title: 'Pay in MUSD', who: 'Tenant', panel: FundPanel },
+  { id: 'run', title: 'Run the lease', who: 'Landlord and tenant', panel: LeasesPanel },
+  { id: 'shares', title: 'Lease shares', who: 'Landlord', panel: SharesPanel },
+]
+
+const STEPS = isMezo ? MEZO_STEPS : SEPOLIA_STEPS
+type StepId = string
 
 function stepFromHash(): StepId {
   const hash = window.location.hash.slice(1)
@@ -33,7 +47,15 @@ function stepFromHash(): StepId {
 function useStep(): StepId {
   const [step, setStep] = useState<StepId>(stepFromHash)
   useEffect(() => {
-    const onHash = () => setStep(stepFromHash())
+    const onHash = () => {
+      setStep(stepFromHash())
+      // Hero links and "Next:" hints change the step from far down the page: bring the steps into view.
+      const nav = document.querySelector('.steps')
+      const top = nav?.getBoundingClientRect().top
+      if (nav && top !== undefined && (top < 0 || top > window.innerHeight * 0.6)) {
+        nav.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -104,6 +126,9 @@ function Footer() {
             <ContractRow name="World ID gate" address={gate.verifier} note="(HumanGate.verifier(): only wallets registered with a World ID 4.0 proof can fund)" />
           ) : null}
           <ContractRow name="LeaseShare1155" address={leaseShare} />
+          {isMezo && DEMO_LANDLORD ? <ContractRow name="DemoLandlord" address={DEMO_LANDLORD} note="(rent from it with one wallet)" /> : null}
+          {isMezo ? <ContractRow name="Mezo BorrowerOperations" address={MEZO_BORROW.borrowerOperations} note="(openTrove / withdrawMUSD)" /> : null}
+          {isMezo ? <ContractRow name="Mezo PriceFeed" address={getAddress(MEZO_BORROW.priceFeed)} /> : null}
           {isMezo ? null : (
             <>
               <ContractRow name="CredentialSync" address={credentialSync} />
@@ -136,28 +161,21 @@ export function App() {
       <Header />
       <NetworkGuard />
       <main className="wrap main">
-        <section className="hero">
-          <h1>Rent held by a contract, not a company.</h1>
-          <p>
-            {isMezo ? (
-              <>
-                With RentOuts, tenants prepay deposit and rent in MUSD on Mezo testnet. Rent unlocks to the landlord period by
-                period, and the deposit comes back at the end. Pay rent in MUSD — Bitcoin-backed.
-              </>
-            ) : (
-              <>
-                With RentOuts, tenants prepay deposit and rent into an escrow on Ethereum Sepolia. Rent unlocks to the landlord period by
-                period, the deposit comes back at the end, and each finished lease adds to the tenant’s portable ENS
-                credential.
-              </>
-            )}
-          </p>
-          <p className="hero-note">
-            {isMezo
-              ? 'Mezo testnet. MUSD has 18 decimals. Disputes go to the arbiter set on the escrow.'
-              : 'Testnet demo with Circle test USDC. Disputes go to an AI judge contract with a human arbiter: the AI only proposes a split, and the human arbiter can override it until it executes.'}
-          </p>
-        </section>
+        {isMezo ? (
+          <MezoHero />
+        ) : (
+          <section className="hero">
+            <h1>Rent held by a contract, not a company.</h1>
+            <p>
+              With RentOuts, tenants prepay deposit and rent into an escrow on Ethereum Sepolia. Rent unlocks to the landlord period by
+              period, the deposit comes back at the end, and each finished lease adds to the tenant’s portable ENS credential.
+            </p>
+            <p className="hero-note">
+              Testnet demo with Circle test USDC. Disputes go to an AI judge contract with a human arbiter: the AI only proposes a
+              split, and the human arbiter can override it until it executes.
+            </p>
+          </section>
+        )}
 
         <nav className="steps" aria-label="Demo steps">
           <ol>

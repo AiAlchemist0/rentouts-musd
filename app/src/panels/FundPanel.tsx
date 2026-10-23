@@ -4,7 +4,9 @@ import { erc20Abi } from '../abi/erc20'
 import { demoChain, gasLabel, isMezo } from '../network'
 import { LeaseState, rentEscrowAbi } from '../abi/rentEscrow'
 import { AddressLink, Empty, ExtLink, NotConfigured, Notice, TxStatus } from '../components/ui'
-import { useContracts, useHumanGate, useLeases, useRentoutsName, useRentoutsNames, useTx, useWallet, type LeaseRow } from '../hooks'
+import { useContracts, useHumanGate, useLeases, useMezoProtocol, useRentoutsName, useRentoutsNames, useTx, useWallet, type LeaseRow } from '../hooks'
+import { btcFor } from '../lib/trove'
+import { formatBtc } from './BorrowPanel'
 import { formatDuration, formatToken } from '../lib/format'
 import { humanGateNotice } from '../lib/humanGate'
 import { walletReadQuery } from '../lib/polling'
@@ -39,6 +41,7 @@ function FundRow({
   const approved = allowance !== undefined && allowance >= due
   const enough = balance !== undefined && balance >= due
   const amount = `${formatToken(due, tokenDecimals)} ${tokenSymbol}`
+  const { data: protocol } = useMezoProtocol()
 
   return (
     <li className="fund-row">
@@ -48,7 +51,8 @@ function FundRow({
         </p>
         <p className="hint">
           {formatToken(lease.deposit, tokenDecimals)} deposit + {lease.periods} × {formatToken(lease.rentPerPeriod, tokenDecimals)} rent,
-          one period every {formatDuration(lease.periodSeconds)}. You prepay {amount}.
+          one period every {formatDuration(lease.periodSeconds)}. You prepay {amount}
+          {isMezo && protocol ? <> (≈ {formatBtc(btcFor(due, protocol.price))} BTC at today’s price)</> : null}.
         </p>
       </div>
       <div className="fund-actions">
@@ -74,7 +78,15 @@ function FundRow({
         </button>
       </div>
       {!enough && balance !== undefined ? (
-        <p className="status status-bad">You need {amount} and hold {formatToken(balance, tokenDecimals)}.</p>
+        <p className="status status-bad">
+          You need {amount} and hold {formatToken(balance, tokenDecimals)}.
+          {isMezo ? (
+            <>
+              {' '}
+              <a href="#borrow">Borrow MUSD against your BTC</a> without selling it.
+            </>
+          ) : null}
+        </p>
       ) : null}
       <TxStatus state={approveTx.state} done="Escrow approved to pull the exact amount." />
       <TxStatus state={fundTx.state} done="Lease funded. Rent starts unlocking now; follow it under Run the lease." />
@@ -104,7 +116,7 @@ export function FundPanel() {
   return (
     <div className="stack">
       <div>
-        <h2>Fund the lease</h2>
+        <h2>{isMezo ? 'Pay the lease in MUSD' : 'Fund the lease'}</h2>
         <p className="lede">
           The tenant approves the escrow for the exact amount, then prepays deposit and rent in one transaction. From
           then on only the contract moves the money: to the landlord as rent, back to the tenant as deposit.
@@ -129,8 +141,8 @@ export function FundPanel() {
         {isMezo ? (
           <>
             Need test funds? <ExtLink href="https://faucet.test.mezo.org">Mezo’s faucet</ExtLink> sends testnet BTC for
-            gas. No MUSD yet? <ExtLink href="https://testnet.mezo.org">Borrow it against your BTC on Mezo</ExtLink>, or swap
-            BTC for MUSD there. Keep your bitcoin, pay your rent.
+            gas. No MUSD yet? <a href="#borrow">Borrow it against your BTC</a> in the step before, or swap BTC for MUSD on{' '}
+            <ExtLink href="https://testnet.mezo.org">testnet.mezo.org</ExtLink>. Keep your bitcoin, pay your rent.
           </>
         ) : (
           <>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCountdown, formatDuration, formatToken, parseToken, parseWhole, shortAddress, tokenMetaFrom } from './format'
+import { formatCountdown, formatDuration, formatRounded, formatToken, parseToken, parseWhole, shortAddress, tokenMetaFrom } from './format'
 import { leasePartyProblem, leaseTiming, totalDue } from './lease'
 
 describe('USDC formatting (6 decimals)', () => {
@@ -107,5 +107,16 @@ describe('tokenMetaFrom', () => {
   it('refuses to guess decimals', () => {
     const reason = new Error('decimals reverted')
     expect(() => tokenMetaFrom(usdc, failed(reason), ok('USDC'))).toThrow(reason)
+  })
+})
+
+describe('formatRounded', () => {
+  it('rounds accrued 18-decimal amounts to cents', () => {
+    expect(formatRounded(2_302_494_433_317_894_579_932n, 18)).toBe('2,302.49')
+    expect(formatRounded(2_302_495_000_000_000_000_000n, 18)).toBe('2,302.50')
+    expect(formatRounded(1_000_000_000_000_000_000n, 18)).toBe('1.00')
+  })
+  it('leaves tokens with few decimals alone', () => {
+    expect(formatRounded(1_234_567n, 6, 6)).toBe('1.234567')
   })
 })

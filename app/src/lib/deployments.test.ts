@@ -128,6 +128,13 @@ describe('mezoTestnet entry', () => {
     expect(parsed.rentEscrow).toBe('0x6666666666666666666666666666666666666666')
     expect(parsed.aiArbiter).toBeUndefined()
   })
+
+  it('reads the DemoLandlord when recorded, and only from the selected entry', () => {
+    const demo = '0x6621dE90776302aD1a3C0190141f9169B4A0112B'
+    const withDemo = { ...raw, mezoTestnet: { ...raw.mezoTestnet, demoLandlord: demo.toLowerCase() } }
+    expect(parseDeployments(withDemo, { key: 'mezoTestnet', chainId: MEZO_CHAIN_ID }).demoLandlord).toBe(demo)
+    expect(parseDeployments(withDemo).demoLandlord).toBeUndefined()
+  })
 })
 
 describe('MUSD abi', () => {

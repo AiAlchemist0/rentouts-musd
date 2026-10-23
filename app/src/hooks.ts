@@ -15,12 +15,13 @@ import { normalize } from 'viem/ens'
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from 'wagmi'
 import { sepolia } from 'wagmi/chains'
 import { aiArbiterAbi } from './abi/aiArbiter'
+import { borrowerOperationsAbi, hintHelpersAbi, MEZO_BORROW, priceFeedAbi, sortedTrovesAbi, troveManagerAbi } from './abi/mezo'
 import { erc20Abi } from './abi/erc20'
 import { humanGateAbi } from './abi/humanGate'
 import { rentEscrowAbi } from './abi/rentEscrow'
 import { rentoutsSubnamesAbi } from './abi/rentoutsSubnames'
 import { CREDENTIAL_KEYS, ENS, ENV_CONTRACTS, JUDGE_ENS_NAME } from './config'
-import { demoChain, fallbackDecimals, fallbackSymbol, switchFirstCopy } from './network'
+import { demoChain, fallbackDecimals, fallbackSymbol, isMezo, switchFirstCopy } from './network'
 import { parseAddressInput, resolveAddressInput, type ResolvedInput } from './lib/addressInput'
 import { judgeFor, type ArbiterLog, type Ruling } from './lib/aiJudge'
 import { labelId, labelUnder, type CredentialRecords } from './lib/credential'
@@ -177,6 +178,8 @@ type WriteParams<
   abi: abi
   functionName: functionName
   args: ContractFunctionArgs<abi, 'nonpayable' | 'payable', functionName>
+  /** Native value for payable calls (BTC on Mezo). */
+  value?: bigint
 }
 
 /**
@@ -288,7 +291,8 @@ export function useRentoutsName(account: Address | undefined) {
     functionName: 'nameOf',
     args: account ? [account] : undefined,
     chainId: sepolia.id,
-    query: { enabled: !!account },
+    // RentOuts names live on Sepolia; the Mezo build shows addresses.
+    query: { enabled: !!account && !isMezo },
   })
 }
 
@@ -298,7 +302,7 @@ export function useRentoutsNames(addresses: readonly Address[]) {
   const unique = [...new Set(addresses.map((a) => getAddress(a)))].sort()
   const { data } = useQuery({
     queryKey: ['rentouts-names', unique],
-    enabled: unique.length > 0,
+    enabled: unique.length > 0 && !isMezo,
     staleTime: 60_000,
     queryFn: async () => {
       const names = await client.multicall({
@@ -632,6 +636,136 @@ export function useRuling(info: AiArbiterInfo | undefined, lease: { id: bigint; 
         ],
       })
       return { ruling, tenantStatements: Number(tenantStatements), landlordStatements: Number(landlordStatements) }
+    },
+  })
+}
+
+// ------------------------------------------------------------------ Mezo Borrow (MUSD against BTC)
+
+export type MezoProtocol = {
+  /** USD per BTC, 18 decimals. */
+  price: bigint
+  /** Minimum collateral ratio (liquidation line), 1e18 = 100%. */
+  mcr: bigint
+  /** Critical system ratio; below it the system is in recovery mode. */
+  ccr: bigint
+  minNetDebt: bigint
+  gasCompensation: bigint
+  /** One-time borrowing fee rate, 1e18 = 100%. */
+  borrowingRate: bigint
+}
+
+/** Mezo Borrow parameters and the BTC price, read together and refreshed every 30 s. */
+export function useMezoProtocol() {
+  const client = useDemoClient()
+  return useQuery({
+    queryKey: ['mezo-protocol'],
+    enabled: isMezo,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    queryFn: async (): Promise<MezoProtocol> => {
+      const bo = { address: MEZO_BORROW.borrowerOperations, abi: borrowerOperationsAbi } as const
+      const [price, mcr, ccr, minNetDebt, gasCompensation, borrowingRate] = await client.multicall({
+        allowFailure: false,
+        contracts: [
+          { address: MEZO_BORROW.priceFeed, abi: priceFeedAbi, functionName: 'fetchPrice' },
+          { ...bo, functionName: 'MCR' },
+          { ...bo, functionName: 'CCR' },
+          { ...bo, functionName: 'minNetDebt' },
+          { ...bo, functionName: 'MUSD_GAS_COMPENSATION' },
+          { ...bo, functionName: 'borrowingRate' },
+        ],
+      })
+      return { price, mcr, ccr, minNetDebt, gasCompensation, borrowingRate }
+    },
+  })
+}
+
+export type Trove = {
+  status: number
+  /** BTC locked, including pending redistribution gains. */
+  coll: bigint
+  /** MUSD owed: principal + interest, including pending amounts. */
+  debt: bigint
+}
+
+/** The account's Mezo trove (status 1 = active). */
+export function useTrove(account: Address | undefined) {
+  const client = useDemoClient()
+  return useQuery({
+    queryKey: ['mezo-trove', account],
+    enabled: isMezo && !!account,
+    refetchInterval: 30_000,
+    queryFn: async (): Promise<Trove> => {
+      const tm = { address: MEZO_BORROW.troveManager, abi: troveManagerAbi } as const
+      const [status, entire] = await client.multicall({
+        allowFailure: false,
+        contracts: [
+          { ...tm, functionName: 'getTroveStatus', args: [account!] },
+          { ...tm, functionName: 'getEntireDebtAndColl', args: [account!] },
+        ],
+      })
+      const [coll, principal, interest, pendingColl, pendingPrincipal, pendingInterest] = entire
+      return {
+        status: Number(status),
+        coll: coll + pendingColl,
+        debt: principal + interest + pendingPrincipal + pendingInterest,
+      }
+    },
+  })
+}
+
+/**
+ * Upper/lower hints for a trove that will sit at nominal ratio `coll / debt`. Mezo keeps troves sorted;
+ * good hints keep the insert cheap. Any failure falls back to zero hints, which the contract accepts
+ * (it then walks the list itself).
+ */
+export async function troveHints(
+  client: ReturnType<typeof useDemoClient>,
+  coll: bigint,
+  debt: bigint,
+): Promise<readonly [Address, Address]> {
+  try {
+    const nicr = await client.readContract({
+      address: MEZO_BORROW.hintHelpers,
+      abi: hintHelpersAbi,
+      functionName: 'computeNominalCR',
+      args: [coll, debt],
+    })
+    const [approx] = await client.readContract({
+      address: MEZO_BORROW.hintHelpers,
+      abi: hintHelpersAbi,
+      functionName: 'getApproxHint',
+      args: [nicr, 30n, BigInt(Date.now())],
+    })
+    return await client.readContract({
+      address: MEZO_BORROW.sortedTroves,
+      abi: sortedTrovesAbi,
+      functionName: 'findInsertPosition',
+      args: [nicr, approx, approx],
+    })
+  } catch {
+    return [zeroAddress, zeroAddress]
+  }
+}
+
+/** MUSD held by the escrow (deposits + unreleased rent across live leases) and how many leases exist. */
+export function useEscrowStats() {
+  const client = useDemoClient()
+  const { escrow, token } = useContracts()
+  return useQuery({
+    queryKey: ['escrow-stats', escrow, token],
+    enabled: !!escrow,
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const [locked, next] = await client.multicall({
+        allowFailure: false,
+        contracts: [
+          { address: token, abi: erc20Abi, functionName: 'balanceOf', args: [escrow!] },
+          { address: escrow!, abi: rentEscrowAbi, functionName: 'nextLeaseId' },
+        ],
+      })
+      return { locked, leases: next - 1n }
     },
   })
 }

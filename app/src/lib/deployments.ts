@@ -17,6 +17,8 @@ export type Deployments = {
   aiArbiter?: Address
   /** A block at or before the AIArbiter deploy: where log scans for Evidence / Proposed start. */
   aiFromBlock?: bigint
+  /** DemoLandlord (Mezo): lets one wallet request a lease as tenant. */
+  demoLandlord?: Address
 }
 
 /** A non-zero address, checksummed; anything else (missing, malformed, zero) is undefined. */
@@ -63,6 +65,7 @@ export function parseDeployments(raw: unknown, selector?: { key: string; chainId
     arbiter: asAddress(core?.arbiter),
     aiArbiter: asAddress(ai?.aiArbiter),
     aiFromBlock: ai ? asBlock(ai.fromBlock) : undefined,
+    demoLandlord: asAddress(core?.demoLandlord),
   }
 }
 

@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { parseEventLogs } from 'viem'
 import { useReadContract } from 'wagmi'
-import { connectToCreate, demoChain } from '../network'
+import { connectToCreate, demoChain, isMezo } from '../network'
+import { DemoLeaseCard } from './DemoLeaseCard'
 import { leaseShareAbi } from '../abi/leaseShare'
 import { rentEscrowAbi } from '../abi/rentEscrow'
 import { CredentialCard } from '../components/CredentialCard'
@@ -102,12 +103,16 @@ export function CreateLeasePanel() {
   return (
     <form className="stack" onSubmit={onSubmit}>
       <div>
-        <h2>Create a lease</h2>
+        <h2>{isMezo ? 'Get a lease' : 'Create a lease'}</h2>
         <p className="lede">
-          The landlord proposes terms to a tenant, named by their ENS name. The tenant then prepays the deposit and every
-          period’s rent into the escrow.
+          {isMezo
+            ? 'A landlord proposes terms to a tenant’s wallet. The tenant then prepays the deposit and every period’s rent in MUSD into the escrow, which pays the landlord one period at a time.'
+            : 'The landlord proposes terms to a tenant, named by their ENS name. The tenant then prepays the deposit and every period’s rent into the escrow.'}
         </p>
       </div>
+
+      {isMezo ? <DemoLeaseCard /> : null}
+      {isMezo ? <h3 className="section-title">Or list your own lease as a landlord</h3> : null}
 
       {escrowError ? <Notice tone="error">{escrowError}</Notice> : null}
       {tokenError ? <Notice tone="error">{tokenError}</Notice> : null}
@@ -115,13 +120,13 @@ export function CreateLeasePanel() {
       <Field
         label="Tenant"
         htmlFor="tenant"
-        hint="An ENS name or a 0x address. Names resolve through the ENSv2 Universal Resolver."
+        hint={isMezo ? 'The tenant’s 0x address on Mezo testnet.' : 'An ENS name or a 0x address. Names resolve through the ENSv2 Universal Resolver.'}
       >
         <input
           id="tenant"
           value={tenantInput}
           onChange={(e) => setTenantInput(e.target.value)}
-          placeholder={parent ? `name.${parent}` : 'name.eth'}
+          placeholder={isMezo ? '0x…' : parent ? `name.${parent}` : 'name.eth'}
           autoComplete="off"
           spellCheck={false}
         />
@@ -167,6 +172,7 @@ export function CreateLeasePanel() {
         <Notice tone="warn">
           Your wallet isn’t on the lease-share compliance allowlist. Creating a lease mints its shares to the landlord,
           so the transaction will fail until the LeaseShare1155 owner allowlists you.
+          {isMezo ? ' To try the tenant side right now, use the demo landlord above.' : null}
         </Notice>
       ) : null}
 

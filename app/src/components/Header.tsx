@@ -1,5 +1,5 @@
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from 'wagmi'
-import { chainPill, chainPillTitle, demoChain, switchChainLabel, wrongNetworkCopy } from '../network'
+import { chainPill, chainPillTitle, demoChain, isMezo, switchChainLabel, wrongNetworkCopy } from '../network'
 import { useRentoutsName } from '../hooks'
 import { errorMessage } from '../lib/errors'
 import { shortAddress } from '../lib/format'
@@ -55,7 +55,7 @@ export function Header() {
   return (
     <header className="header">
       <div className="wrap header-row">
-        <a className="brand" href="#identity">
+        <a className="brand" href={isMezo ? '#create' : '#identity'}>
           <Logo />
           <span className="brand-name">RentOuts</span>
           <span className="brand-sub">Escrow</span>

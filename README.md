@@ -1,6 +1,6 @@
 # RentOuts MUSD
 
-Rent deposits and rent, paid in **MUSD** on Mezo testnet.
+**Keep your bitcoin. Pay your rent.** Long-term rent and deposits paid in **MUSD** on Mezo testnet.
 
 [rentouts.co](https://rentouts.co) is the existing rental marketplace. This repository is the new work for the Mezo Buildathon: the same non-custodial `RentEscrow` contracts, wired to MUSD, Mezo’s Bitcoin-backed stablecoin.
 
@@ -8,7 +8,22 @@ Rent deposits and rent, paid in **MUSD** on Mezo testnet.
 
 ## Try it
 
-**Live app:** https://mezo.rentouts.co — create a lease, pay deposit and rent in MUSD, watch rent unlock, close and get the deposit back. Lease #2 is running on the live escrow, so the *Run the lease* tab shows it without a wallet. Source and steps: [`app/`](app/README.md).
+**Live app: https://mezo.rentouts.co** — one wallet is enough:
+
+1. **Get a lease** from the demo landlord (a contract that rents to anyone).
+2. **Borrow MUSD** against testnet BTC, in the app: it calls Mezo Borrow (`openTrove`, or `withdrawMUSD` on an existing trove) and shows the BTC price, collateral ratio, fee and liquidation price first.
+3. **Pay in MUSD**: approve, then prepay the deposit and every period’s rent into the escrow.
+4. **Run the lease**: rent releases to the landlord period by period; after the term, close it and the deposit comes back.
+
+Lease #2 is running on the live escrow until 6 Nov, so *Run the lease* shows rent unlocking without a wallet. Source and steps: [`app/`](app/README.md).
+
+## How MUSD is used
+
+| Where | Mezo / MUSD call |
+|---|---|
+| Borrow step | `BorrowerOperations.openTrove` / `withdrawMUSD`, hints from `HintHelpers.getApproxHint` + `SortedTroves.findInsertPosition`, price from the Mezo `PriceFeed` |
+| Pay step | `MUSD.approve` → `RentEscrow.fundLease` pulls deposit + all rent in MUSD |
+| Run step | `RentEscrow.claimRent` releases MUSD to the landlord per period; `closeLease` returns the MUSD deposit |
 
 ## Network
 
@@ -29,6 +44,7 @@ Live `mezoTestnet` (source verified on Sourcify, exact match):
 |---|---|
 | RentEscrow | [`0xA9f09366991E6df87855F4B99025911790d4C3aF`](https://explorer.test.mezo.org/address/0xA9f09366991E6df87855F4B99025911790d4C3aF) |
 | LeaseShare1155 | [`0xfE8bF13ed62A473277d841b0DEDf7720C3DBc820`](https://explorer.test.mezo.org/address/0xfE8bF13ed62A473277d841b0DEDf7720C3DBc820) |
+| DemoLandlord | [`0x6621dE90776302aD1a3C0190141f9169B4A0112B`](https://explorer.test.mezo.org/address/0x6621dE90776302aD1a3C0190141f9169B4A0112B) — 20 MUSD deposit, 10 MUSD / 60s × 3 |
 | Arbiter | `0x1da334A5FaB59a741fDAE7f081c7f592027b3106` |
 | Human gate | none |
 
@@ -57,7 +73,8 @@ Full log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 
 ```bash
 forge install
-forge test
+forge test        # 104 tests, including the RentEscrow invariant suite
+cd app && npm install && npm test   # app: trove math, deployments, copy
 ```
 
 ## Deploy
@@ -75,6 +92,15 @@ forge script script/DeployEscrow.s.sol --profile mezo --rpc-url mezo_testnet \
 `ESCROW_HUMAN_GATE=none` leaves funding ungated on this escrow (a gate cannot be added later). A future deploy can pass a `HumanGate`; that gate never holds tokens and never touches a lease that is already funded.
 
 A successful broadcast adds a `mezoTestnet` entry to `deployments.json`. The `baseSepolia` key already in that file is a placeholder so the script's read-modify-write can be tested. It is not a live deployment.
+
+### DemoLandlord
+
+```bash
+ESCROW=<RentEscrow address> forge script script/DeployDemoLandlord.s.sol --profile mezo --rpc-url mezo_testnet \
+  --account <keystore-name> --sender <deployer-address> --broadcast
+```
+
+Then the LeaseShare1155 owner allowlists it once (`setAllowlist(demoLandlord, true)`): creating a lease mints its shares to the landlord.
 
 ## License
 

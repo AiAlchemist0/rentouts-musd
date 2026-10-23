@@ -72,3 +72,11 @@ export function formatCountdown(totalSeconds: number): string {
 export const txUrl = (hash: Hash) => `${EXPLORER}/tx/${hash}`
 export const addressUrl = (address: Address) => `${EXPLORER}/address/${address}`
 export const ensAppUrl = (name: string) => `${ENS_APP}/${name}`
+
+/** Like formatToken, but rounded to `places` decimals (half up) for figures that accrue, e.g. trove interest. */
+export function formatRounded(amount: bigint, decimals: number, places = 2): string {
+  if (decimals <= places) return formatToken(amount, decimals)
+  const unit = 10n ** BigInt(decimals - places)
+  const rounded = ((amount < 0n ? -amount : amount) + unit / 2n) / unit
+  return formatToken(amount < 0n ? -rounded : rounded, places)
+}

@@ -96,6 +96,9 @@ export const ENV_CONTRACTS = {
   aiFromBlock: configured.aiFromBlock,
 } as const
 
+/** DemoLandlord recorded for this escrow (Mezo only; it creates leases on the recorded escrow). */
+export const DEMO_LANDLORD = configured.escrow && DEPLOYMENTS.rentEscrow === configured.escrow ? DEPLOYMENTS.demoLandlord : undefined
+
 /** The AI judge's ENS name, shown on proposals when it resolves to AIArbiter's agent. */
 export const JUDGE_ENS_NAME = env.VITE_JUDGE_ENS_NAME?.trim() || DEFAULT_JUDGE_ENS_NAME
 

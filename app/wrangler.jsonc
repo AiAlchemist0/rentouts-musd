@@ -1,0 +1,9 @@
+{
+  // Static Mezo lease app. Deploy: npm run build && npx wrangler deploy
+  "name": "rentouts-mezo",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" },
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "mezo.rentouts.co", "custom_domain": true }]
+}
