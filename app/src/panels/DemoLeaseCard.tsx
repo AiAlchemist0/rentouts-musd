@@ -52,13 +52,15 @@ function DemoLease({ demo }: { demo: Address }) {
     if (receipt) {
       const [created] = parseEventLogs({ abi: demoLandlordAbi, eventName: 'DemoLeaseCreated', logs: receipt.logs })
       // No event: the tenant already had an unfunded demo lease, which requestLease returned instead.
-      const id =
-        created?.args.leaseId ??
-        (address
-          ? await client
-              .readContract({ address: demo, abi: demoLandlordAbi, functionName: 'lastLeaseOf', args: [address] })
-              .catch(() => undefined)
-          : undefined)
+      let id = created?.args.leaseId
+      // Mezo's RPC backends can lag a block behind, so ask a few times.
+      for (let i = 0; id === undefined && address && i < 4; i++) {
+        const last = await client
+          .readContract({ address: demo, abi: demoLandlordAbi, functionName: 'lastLeaseOf', args: [address] })
+          .catch(() => 0n)
+        if (last > 0n) id = last
+        else await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
       setLeaseId(id ?? -1n)
     }
   }
