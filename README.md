@@ -7,6 +7,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 | | |
 |---|---|
 | **Live app** | **https://mezo.rentouts.co** (Mezo testnet, one wallet is enough) |
+| **Pitch deck** | [docs/RentOuts-Mezo-Wave1.pdf](docs/RentOuts-Mezo-Wave1.pdf) (10 slides) |
 | **Demo video** | **https://youtu.be/AFmjEAp-zj8** (1:55, the full loop on testnet) |
 | **Existing product** | https://rentouts.co — long-term rental marketplace (6–24 month homes, not nightly stays) |
 | **Buildathon** | Mezo Buildathon, Wave 1 · Track 2: Access and Distribution |
