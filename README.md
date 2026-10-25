@@ -9,6 +9,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 | **Live app** | **https://mezo.rentouts.co** (Mezo testnet, one wallet is enough) |
 | **Pitch deck** | [docs/RentOuts-Mezo-Wave1.pdf](docs/RentOuts-Mezo-Wave1.pdf) (10 slides) |
 | **Demo video** | **https://youtu.be/AFmjEAp-zj8** (1:55, the full loop on testnet) |
+| **At a glance** | [Five slides](#at-a-glance): the pitch, Mezo integration, one lease end to end, the business, trust |
 | **Existing product** | https://rentouts.co — long-term rental marketplace (6–24 month homes, not nightly stays) |
 | **Buildathon** | Mezo Buildathon, Wave 1 · Track 2: Access and Distribution |
 | **Chain** | Mezo testnet, chain id 31611 · gas in BTC · MUSD `0x1189…c503` |
@@ -22,6 +23,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 ## Contents
 
 - [Demo video](https://youtu.be/AFmjEAp-zj8) (1:55)
+- [At a glance](#at-a-glance)
 - [The problem](#the-problem)
 - [What we built](#what-we-built)
 - [Try it in five minutes](#try-it-in-five-minutes)
@@ -34,6 +36,20 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 - [Roadmap](#roadmap)
 - [Repository map](#repository-map)
 - [Build, test, deploy](#build-test-deploy)
+
+---
+
+## At a glance
+
+![Keep your bitcoin. Pay your rent.](docs/gallery/gallery-1.png)
+
+![Mezo Borrow, called straight from the app](docs/gallery/gallery-2.png)
+
+![One lease, end to end, on Mezo](docs/gallery/gallery-3.png)
+
+![A real rental marketplace, now settling in MUSD](docs/gallery/gallery-4.png)
+
+![Open source, tested, verified, and running now](docs/gallery/gallery-5.png)
 
 ---
 
