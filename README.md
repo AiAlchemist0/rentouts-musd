@@ -33,6 +33,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 - [Contracts and live evidence](#contracts-and-live-evidence)
 - [Security model](#security-model)
 - [Limitations](#limitations)
+- [RentEscrowV2 (Wave 2)](#rentescrowv2-wave-2)
 - [Roadmap](#roadmap)
 - [Repository map](#repository-map)
 - [Build, test, deploy](#build-test-deploy)
@@ -245,6 +246,20 @@ Full transaction log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 **Local rules on deposits and prepaid rent vary.** Some jurisdictions cap deposits or prepaid rent, or require deposits held in trust with interest. A production lease has to fit the local rules; this testnet escrow does not check them.
 
 **Testnet, not audited.** No real funds, no external audit yet. `DemoLandlord` exists only so one wallet can try the tenant side.
+
+## RentEscrowV2 (Wave 2)
+
+`RentEscrowV2` (`src/RentEscrowV2.sol`) is the Wave-2 escrow: the deployed V1 behaviour unchanged, plus three of the Wave-2 row's four items (pay-as-you-go monthly funding is the remaining one). Not deployed yet — `script/DeployEscrowV2.s.sol` deploys it and records a `mezoTestnetV2` entry when broadcast. The `Limitations` above describe V1; of those, "no mutual early termination" and "a dispute has no timeout" are what this section adds.
+
+**Borrow-and-fund in one transaction — `borrowAndFund` / `withdrawAndFund`.** A tenant with BTC but no MUSD signs one Mezo `OpenTrove` (or `WithdrawMUSD`) EIP-712 message naming the escrow as recipient; a single call opens — or draws on — the tenant's own trove and funds the lease with the minted MUSD, refunding any surplus in the same transaction. *Trust model:* the escrow never holds the BTC — `msg.value` goes straight into the tenant's trove, which only the tenant's signature can move; the MUSD received is measured as a balance delta (never taken from the signed numbers), and anything short of deposit + all rent reverts the whole transaction. The relay itself is Mezo's `BorrowerOperationsSignatures`; configuring `address(0)` disables both paths.
+
+**Front-running.** Mezo's relay does not restrict who submits a signature, so a watcher can copy a tenant's pending signature and relay it directly with recipient = the escrow: the tenant's nonce is spent and their trove debt grows, but no lease is booked, and the tenant's own call then reverts. Nothing is stranded: the tenant can always fall back to `fundLease` (or sign a fresh operation), the minted MUSD shows up in `unbookedBalance()` — the balance beyond `totalEscrowed`, which no lease can ever touch — and the arbiter returns it with `returnUnbooked` to whoever the Mezo event logs show it belongs to. For the same reason the escrow accepts only value-zero BTC transfers (`StrayBtc` otherwise): Mezo's trove code always settles the caller's collateral delta with one, and any real BTC would have no way out.
+
+**Mutual early termination — `proposeTermination` / `withdrawTermination` / `acceptTermination`.** Either party proposes a split (a penalty to the landlord), the other accepts before the terms expire; earned-but-unclaimed rent always goes to the landlord, the penalty comes out of the tenant's side, the tenant gets the rest, and the lease closes. *Trust model:* no third party is involved — nothing settles unless both parties signed the exact terms (a hash of lease, proposer, penalty, expiry); the penalty is bounded by the tenant's remaining side at propose and re-checked at accept; either party can withdraw its proposal at any time before acceptance; a new proposal replaces the old one.
+
+**Dispute timeout — `resolveByTimeout`.** A dispute frozen for `disputeTimeout` (immutable, 30 days by default) can be settled by anyone: the landlord takes the rent earned up to the dispute, the tenant the rest. *Trust model:* the arbiter's power is unchanged while it acts in time; after the timeout nobody can hold the funds hostage, because the split is mechanical, from data the contract already keeps. Whichever resolution comes first — arbiter ruling or timeout — wins.
+
+`test/RentEscrowV2.fork.t.sol` proves the borrow path against real testnet state at a pinned block: one transaction opens the tenant's trove and funds the lease, the recipient receives exactly `debtAmount`, and the surplus comes back to the tenant.
 
 ## Roadmap
 
