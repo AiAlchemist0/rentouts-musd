@@ -12,21 +12,31 @@ import {LeaseShare1155} from "./LeaseShare1155.sol";
 /// @title RentEscrowV2
 /// @notice Wave-2 non-custodial rental escrow on Mezo: the V1 lifecycle (prepaid deposit + all rent
 ///         in MUSD, period-by-period release to the landlord, deposit back at the end, fixed-arbiter
-///         disputes) plus borrow-and-fund in one transaction, mutual early termination and a dispute
-///         timeout. See {IRentEscrowV2} for the lifecycle and the invariants (INV-1..INV-5)
-///         exercised by test/RentEscrowV2.invariant.t.sol.
+///         disputes) plus borrow-and-fund in one transaction, mutual early termination, a dispute
+///         timeout, and pay-monthly leases drawn from the tenant's Mezo trove. See {IRentEscrowV2}
+///         for the lifecycle and the invariants (INV-1..INV-6) exercised by
+///         test/RentEscrowV2.invariant.t.sol.
 /// @dev    No owner, no admin, no fees, no upgradeability: token, arbiter, leaseShare, humanGate,
 ///         borrowerOpsSignatures and disputeTimeout are immutable. RentEscrow (V1) stays deployed
 ///         and untouched; this contract restates its behaviour with the Wave-2 additions, and the
 ///         only party-independent role is still the arbiter, who can never be a lease's landlord or
 ///         tenant and can only split a disputed lease's own escrow between that lease's parties.
-///         The two new settlement paths are stricter still: an accepted mutual termination moves
-///         tokens only per terms both parties signed off on, and resolveByTimeout pays a fixed,
-///         pre-agreed-by-deployment split that nobody chooses at call time. Mezo's relay accepts
+///         The three new settlement paths are stricter still: an accepted mutual termination moves
+///         tokens only per terms both parties signed off on, resolveByTimeout pays a fixed,
+///         pre-agreed-by-deployment split that nobody chooses at call time, and claimDefault pays a
+///         split computed only from the lease's own funded terms. Mezo's relay accepts
 ///         signatures from anyone, so a copied signature can mint MUSD here with no lease behind
 ///         it: that unbooked pot is tracked apart from every lease (totalEscrowed /
 ///         unbookedBalance) and only the arbiter can hand it back (returnUnbooked) — never a
 ///         lease's own escrow.
+///         MONTHLY leases (createLeaseMonthly) keep the same term, clock and claim cadence as
+///         prepaid ones, but funding covers deposit + ONE period's rent and the tenant tops up with
+///         payRent / withdrawAndPayRent; rent is only released for funded periods, and every split
+///         (dispute, timeout, termination, default, close) is derived from escrowBalance and
+///         periodsFunded, so a partially funded lease settles exactly on what it took in. A tenant
+///         who lets an unfunded period run one full period (the grace) past its due date defaults:
+///         claimDefault gives the landlord the funded unclaimed rent plus at most one period's rent
+///         out of the deposit, the tenant the rest of the deposit.
 ///         humanGate (optional) is asked once, in every funding path, whether the tenant is a
 ///         verified human; a gate can only refuse NEW funding. The token must be a plain ERC-20
 ///         (no fee-on-transfer / rebasing), e.g. MUSD on Mezo.
@@ -135,13 +145,19 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
     }
 
     /// @inheritdoc IRentEscrowV2
-    /// @dev Zero unless the lease is ACTIVE (rent is frozen while DISPUTED).
+    /// @dev Zero unless the lease is ACTIVE (rent is frozen while DISPUTED). Capped at periodsFunded:
+    ///      a monthly lease only ever releases rent that was actually paid in (a prepaid lease is
+    ///      fully funded from the start, so this cap never binds for it).
     // forge-lint: disable-next-item(block-timestamp) -- periods are >= 60s; seconds of drift are harmless
     function claimable(uint256 leaseId) public view returns (uint16 periods, uint256 amount) {
         Lease storage l = _leases[leaseId];
         if (l.state != State.ACTIVE) return (0, 0);
-        // elapsed >= periodsClaimed: periodsClaimed only ever catches up to a past `elapsed`.
-        periods = _elapsedPeriods(l) - l.periodsClaimed;
+        uint256 elapsed = _elapsedPeriods(l);
+        if (elapsed > l.periodsFunded) elapsed = l.periodsFunded;
+        // elapsed >= periodsClaimed: periodsClaimed only ever catches up to a past capped elapsed.
+        // casting to 'uint16' is safe because elapsed <= l.periodsFunded, a uint16
+        // forge-lint: disable-next-item(unsafe-typecast)
+        periods = uint16(elapsed) - l.periodsClaimed;
         amount = uint256(periods) * l.rentPerPeriod;
     }
 
@@ -165,6 +181,31 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
         nonReentrant
         returns (uint256 leaseId)
     {
+        leaseId = _create(tenant, deposit, rentPerPeriod, periodSeconds, periods, false);
+    }
+
+    /// @inheritdoc IRentEscrowV2
+    /// @dev Same terms and checks as createLease (the uint128 bound is on deposit + ALL rent: a
+    ///      monthly lease can grow to hold exactly that once every period is paid in). Emits
+    ///      LeaseCreatedMonthly so indexers can tell the two kinds apart by event alone.
+    function createLeaseMonthly(
+        address tenant,
+        uint128 deposit,
+        uint128 rentPerPeriod,
+        uint32 periodSeconds,
+        uint16 periods
+    ) external nonReentrant returns (uint256 leaseId) {
+        leaseId = _create(tenant, deposit, rentPerPeriod, periodSeconds, periods, true);
+    }
+
+    function _create(
+        address tenant,
+        uint128 deposit,
+        uint128 rentPerPeriod,
+        uint32 periodSeconds,
+        uint16 periods,
+        bool monthly
+    ) internal returns (uint256 leaseId) {
         uint256 total = uint256(deposit) + uint256(rentPerPeriod) * periods;
         if (
             tenant == address(0) || tenant == msg.sender || msg.sender == arbiter || tenant == arbiter
@@ -181,10 +222,16 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
             periodSeconds: periodSeconds,
             periods: periods,
             periodsClaimed: 0,
+            periodsFunded: 0,
             startTime: 0,
+            monthly: monthly,
             state: State.CREATED
         });
-        emit LeaseCreated(leaseId, msg.sender, tenant, deposit, rentPerPeriod, periodSeconds, periods);
+        if (monthly) {
+            emit LeaseCreatedMonthly(leaseId, msg.sender, tenant, deposit, rentPerPeriod, periodSeconds, periods);
+        } else {
+            emit LeaseCreated(leaseId, msg.sender, tenant, deposit, rentPerPeriod, periodSeconds, periods);
+        }
 
         if (leaseShare != address(0)) {
             // state is written above and every mutating entry point is nonReentrant
@@ -297,17 +344,72 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
         _requireVerifiedHuman(msg.sender);
 
         uint256 owed = _owed(l);
-        uint256 before = IERC20(token).balanceOf(address(this));
-        // state is only read above and every mutating entry point is nonReentrant
-        // forge-lint: disable-next-item(reentrancy-no-eth)
-        IMezoBorrowerOperationsSignatures(borrowerOpsSignatures)
-            .withdrawMUSDWithSignature(amount, upperHint, lowerHint, msg.sender, address(this), signature, deadline);
-        uint256 received = IERC20(token).balanceOf(address(this)) - before;
+        uint256 received = _mezoWithdraw(amount, upperHint, lowerHint, msg.sender, signature, deadline);
         if (received < owed) revert InsufficientBorrowed(leaseId, received, owed);
 
         _bookFunding(l, leaseId);
         // reentry is impossible (nonReentrant) and the amounts come from the measured delta
         // forge-lint: disable-next-line(reentrancy-events)
+        emit LeaseBorrowFunded(leaseId, msg.sender, amount, received, received - owed);
+        _pay(msg.sender, received - owed); // surplus back to the tenant
+    }
+
+    /// @inheritdoc IRentEscrowV2
+    /// @dev Tenant only, ACTIVE monthly leases only: a prepaid lease is fully funded from the start
+    ///      (NotMonthly) and a disputed one must settle before it can take on new periods. Same
+    ///      human-gate check as every funding path. Books the periods before the pull (CEI), like
+    ///      fundLease books before its transferFrom.
+    function payRent(uint256 leaseId, uint16 count) external nonReentrant {
+        Lease storage l = _leases[leaseId];
+        _requireState(l, leaseId, State.ACTIVE);
+        if (!l.monthly) revert NotMonthly(leaseId);
+        if (msg.sender != l.tenant) revert NotTenant(leaseId);
+        _requireVerifiedHuman(msg.sender);
+
+        count = _cappedPayCount(l, leaseId, count);
+        uint256 amount = uint256(count) * l.rentPerPeriod;
+
+        // funding bookkeeping, the payRent way: periods grow with the balance, never past `periods`
+        l.periodsFunded += count;
+        escrowBalance[leaseId] += amount;
+        totalEscrowed += amount;
+        emit RentPaid(leaseId, msg.sender, count, amount);
+
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    /// @inheritdoc IRentEscrowV2
+    /// @dev Same trust shape as withdrawAndFund (the signature fixes amount, borrower = msg.sender,
+    ///      recipient = this contract; the MUSD received is measured, never taken from the
+    ///      arguments: INV-5), paying rent periods instead of funding the lease. Tenant only, ACTIVE
+    ///      monthly leases only, same human-gate check as every funding path.
+    function withdrawAndPayRent(
+        uint256 leaseId,
+        uint16 count,
+        uint256 amount,
+        address upperHint,
+        address lowerHint,
+        bytes calldata signature,
+        uint256 deadline
+    ) external nonReentrant {
+        if (borrowerOpsSignatures == address(0)) revert MezoDisabled();
+        Lease storage l = _leases[leaseId];
+        _requireState(l, leaseId, State.ACTIVE);
+        if (!l.monthly) revert NotMonthly(leaseId);
+        if (msg.sender != l.tenant) revert NotTenant(leaseId);
+        _requireVerifiedHuman(msg.sender);
+
+        count = _cappedPayCount(l, leaseId, count);
+        uint256 owed = uint256(count) * l.rentPerPeriod;
+        uint256 received = _mezoWithdraw(amount, upperHint, lowerHint, msg.sender, signature, deadline);
+        if (received < owed) revert InsufficientBorrowed(leaseId, received, owed);
+
+        l.periodsFunded += count;
+        escrowBalance[leaseId] += owed;
+        totalEscrowed += owed;
+        // reentry is impossible (nonReentrant) and the amounts come from the measured delta
+        // forge-lint: disable-next-line(reentrancy-events)
+        emit RentPaid(leaseId, msg.sender, count, owed);
         emit LeaseBorrowFunded(leaseId, msg.sender, amount, received, received - owed);
         _pay(msg.sender, received - owed); // surplus back to the tenant
     }
@@ -334,8 +436,61 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
     }
 
     /// @inheritdoc IRentEscrowV2
+    /// @dev The default rule, mechanically from the lease's own funded terms: period i (0-based) is
+    ///      due at startTime + i * periodSeconds, so with graceSeconds == periodSeconds the lease is
+    ///      in default exactly when now >= startTime + periodsFunded * periodSeconds + periodSeconds
+    ///      while periodsFunded < periods (the next unfunded period has run a full period past its
+    ///      due date; "elapsed > periodsFunded" is the same condition, written on the clock). The
+    ///      deposit forfeit is capped at ONE unpaid period's rent and at the deposit itself, so a
+    ///      tenant who paid deposit + n periods can never lose more than one period they did not
+    ///      pay, and a landlord can never reach unfunded rent. Counts leasesDefaulted, never
+    ///      leasesCompleted.
+    // forge-lint: disable-next-item(block-timestamp) -- periods are >= 60s; seconds of drift are harmless
+    function claimDefault(uint256 leaseId) external nonReentrant {
+        Lease storage l = _leases[leaseId];
+        _requireState(l, leaseId, State.ACTIVE);
+        if (msg.sender != l.landlord) revert NotLandlord(leaseId);
+        if (!l.monthly) revert NotMonthly(leaseId);
+        uint256 dueAt = uint256(l.startTime) + uint256(l.periodsFunded) * l.periodSeconds + l.periodSeconds;
+        if (l.periodsFunded == l.periods || block.timestamp < dueAt) revert NotDefaulted(leaseId, dueAt);
+
+        // all funded periods have elapsed by then (elapsed > periodsFunded), so the funded
+        // unclaimed rent is earned; the forfeit comes out of the deposit only
+        uint16 fundedUnclaimed = l.periodsFunded - l.periodsClaimed;
+        uint256 rentToLandlord = uint256(fundedUnclaimed) * l.rentPerPeriod;
+        uint128 deposit = l.deposit;
+        // forfeit <= one unpaid period's rent, and <= the deposit (uint128: min of two uint128s)
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint128 forfeit = l.rentPerPeriod < deposit ? l.rentPerPeriod : deposit;
+        uint256 toLandlord = rentToLandlord + forfeit;
+        uint256 toTenant = escrowBalance[leaseId] - toLandlord; // == deposit - forfeit
+
+        l.periodsClaimed = l.periodsFunded;
+        l.state = State.CLOSED;
+        totalEscrowed -= escrowBalance[leaseId];
+        escrowBalance[leaseId] = 0;
+        TenantStats storage s = _stats[l.tenant];
+        s.leasesDefaulted += 1;
+        s.periodsPaid += fundedUnclaimed;
+        // casting to 'uint128' is safe because rentToLandlord <= rent * periods <= type(uint128).max
+        // forge-lint: disable-next-line(unsafe-typecast)
+        s.rentPaid += uint128(rentToLandlord);
+        s.depositsPosted += deposit;
+        // casting to 'uint128' is safe because toTenant <= deposit, a uint128
+        // forge-lint: disable-next-line(unsafe-typecast)
+        s.depositsReturned += uint128(toTenant);
+        emit LeaseDefaulted(leaseId, l.landlord, rentToLandlord, forfeit, toTenant);
+
+        _pay(l.landlord, toLandlord);
+        _pay(l.tenant, toTenant);
+    }
+
+    /// @inheritdoc IRentEscrowV2
     /// @dev Reverts TermNotOver before endTime, and for anyone but the landlord until
     ///      endTime + periodSeconds (the grace window in which the landlord can still dispute).
+    ///      A monthly lease must also be fully funded (RentNotFullyFunded): closeLease pays every
+    ///      remaining period's rent, which only exists when the tenant actually paid them in. An
+    ///      underfunded monthly lease past its due date is the landlord's claimDefault instead.
     // forge-lint: disable-next-item(block-timestamp) -- periods are >= 60s; seconds of drift are harmless
     function closeLease(uint256 leaseId) external nonReentrant {
         Lease storage l = _leases[leaseId];
@@ -343,6 +498,7 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
         uint256 end = _endTime(l);
         if (block.timestamp < end) revert TermNotOver(leaseId);
         if (msg.sender != l.landlord && block.timestamp < end + l.periodSeconds) revert TermNotOver(leaseId);
+        if (l.periodsFunded != l.periods) revert RentNotFullyFunded(leaseId, l.periodsFunded, l.periods);
 
         uint16 remaining = l.periods - l.periodsClaimed;
         uint256 toLandlord = uint256(remaining) * l.rentPerPeriod;
@@ -491,8 +647,8 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
         }
 
         (uint16 due, uint256 earnedUnclaimed) = claimable(leaseId);
-        uint16 elapsed = l.periodsClaimed + due;
-        uint256 tenantSide = uint256(l.deposit) + uint256(l.periods - elapsed) * l.rentPerPeriod;
+        uint16 elapsed = l.periodsClaimed + due; // == min(elapsed, periodsFunded), a funded count
+        uint256 tenantSide = uint256(l.deposit) + uint256(l.periodsFunded - elapsed) * l.rentPerPeriod;
         if (p.penaltyToLandlord > tenantSide) revert PenaltyTooHigh(leaseId, p.penaltyToLandlord, tenantSide);
 
         uint256 toLandlord = earnedUnclaimed + p.penaltyToLandlord;
@@ -525,9 +681,42 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
         }
     }
 
-    /// @dev deposit + all rent: what funding a lease costs, and what the escrow will hold for it.
+    /// @dev What funding costs, and what the escrow holds for the lease right after: deposit + all
+    ///      rent for a prepaid lease, deposit + the FIRST period's rent for a monthly one (the rest
+    ///      arrives period by period through payRent / withdrawAndPayRent).
     function _owed(Lease storage l) internal view returns (uint256) {
-        return uint256(l.deposit) + uint256(l.rentPerPeriod) * l.periods;
+        uint256 fundedPeriods = l.monthly ? 1 : l.periods;
+        return uint256(l.deposit) + uint256(l.rentPerPeriod) * fundedPeriods;
+    }
+
+    /// @dev Caps a payRent / withdrawAndPayRent count at the unfunded remainder (periodsFunded
+    ///      never grows past `periods`) and refuses a count of zero.
+    function _cappedPayCount(Lease storage l, uint256 leaseId, uint16 count) internal view returns (uint16) {
+        // periodsFunded <= periods is invariant, so this cannot underflow
+        uint16 remaining = l.periods - l.periodsFunded;
+        if (count > remaining) count = remaining;
+        if (count == 0) revert RentFullyFunded(leaseId);
+        return count;
+    }
+
+    /// @dev Relays a tenant-signed WithdrawMUSD to Mezo (borrower = the caller, recipient = this
+    ///      escrow) and returns the MUSD that actually arrived, measured as a balance delta: the
+    ///      caller decides what a sufficient amount is and refunds the surplus (INV-5). Shared by
+    ///      withdrawAndFund and withdrawAndPayRent.
+    function _mezoWithdraw(
+        uint256 amount,
+        address upperHint,
+        address lowerHint,
+        address borrower,
+        bytes calldata signature,
+        uint256 deadline
+    ) internal returns (uint256 received) {
+        uint256 before = IERC20(token).balanceOf(address(this));
+        // state is only read by the caller and every mutating entry point is nonReentrant
+        // forge-lint: disable-next-item(reentrancy-no-eth)
+        IMezoBorrowerOperationsSignatures(borrowerOpsSignatures)
+            .withdrawMUSDWithSignature(amount, upperHint, lowerHint, borrower, address(this), signature, deadline);
+        received = IERC20(token).balanceOf(address(this)) - before;
     }
 
     /// @dev Books a freshly funded lease the same way for all three funding paths: CREATED -> ACTIVE
@@ -541,6 +730,8 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
         uint64 start = uint64(block.timestamp);
         l.state = State.ACTIVE;
         l.startTime = start;
+        // prepaid leases are fully funded the moment they start; monthly ones hold one period
+        l.periodsFunded = l.monthly ? 1 : l.periods;
         // every funding path calls this exactly once per lease, from State.CREATED, where
         // escrowBalance[leaseId] is still 0: the sum grows by exactly `amount`
         totalEscrowed += amount;
@@ -562,20 +753,26 @@ contract RentEscrowV2 is IRentEscrowV2, ReentrancyGuard {
         return uint16(elapsed);
     }
 
-    /// @dev Unearned rent + deposit: what is on the tenant's side of an early settlement.
+    /// @dev Unearned rent + deposit: what is on the tenant's side of an early settlement. Only
+    ///      FUNDED periods count (a prepaid lease funds them all): unfunded periods of a monthly
+    ///      lease are neither in the escrow nor the tenant's to give up.
     function _tenantSide(Lease storage l) internal view returns (uint256) {
-        return uint256(l.deposit) + uint256(l.periods - _elapsedPeriods(l)) * l.rentPerPeriod;
+        uint256 elapsed = _elapsedPeriods(l);
+        if (elapsed > l.periodsFunded) elapsed = l.periodsFunded;
+        return uint256(l.deposit) + uint256(l.periodsFunded - elapsed) * l.rentPerPeriod;
     }
 
     /// @dev Books a dispute ruling into the tenant's stats. The escrow pot is, in order, rent not
     ///      yet earned when the dispute opened, the deposit, then earned-but-unclaimed rent. The
     ///      tenant's payout is read from the front (unearned refund, then deposit back), the
     ///      landlord's from the back (earned rent first). `earned` is _earnedAtDispute (>=
-    ///      periodsClaimed). Shared by resolveDispute, resolveByTimeout and acceptTermination, which
-    ///      all settle the whole remaining escrow in one split.
+    ///      periodsClaimed, <= periodsFunded). Only funded periods count as unearned rent: a
+    ///      monthly lease's unfunded periods never entered the pot. Shared by resolveDispute,
+    ///      resolveByTimeout and acceptTermination, which all settle the whole remaining escrow in
+    ///      one split.
     function _recordRuling(Lease storage l, uint16 earned, uint256 toTenant, uint256 toLandlord) internal {
         uint128 deposit = l.deposit;
-        uint256 unearnedRent = uint256(l.periods - earned) * l.rentPerPeriod;
+        uint256 unearnedRent = uint256(l.periodsFunded - earned) * l.rentPerPeriod;
         uint256 depositBack = toTenant > unearnedRent ? toTenant - unearnedRent : 0;
         if (depositBack > deposit) depositBack = deposit;
 

@@ -284,4 +284,67 @@ contract RentEscrowV2ForkTest is Test {
         assertEq(IERC20(MUSD).balanceOf(address(escrow)), 2 * OWED, "surplus of the second fund refunded");
         assertEq(IMezoDomain(BORROWER_OPS_SIGNATURES).getNonce(tenant), 2, "both signatures consumed");
     }
+
+    /// @dev The monthly story against the real protocol: the same one borrowAndFund call opens the
+    ///      tenant's trove and funds a MONTHLY lease with deposit + ONE period (not the whole
+    ///      term); one period later a fresh WithdrawMUSD signature pays the next period's rent out
+    ///      of the same trove. The trove's debt grows by the rent plus its 0.1% borrowing fee (and
+    ///      any interest the system accrued over the warped period, hence the >= bound).
+    function test_Fork_MonthlyLease_PaysNextPeriodFromTheTrove() public {
+        uint256 monthlyFirst = uint256(DEPOSIT) + RENT; // 625e18, not the 1250e18 prepaid OWED
+        uint256 leaseId;
+        address upper;
+        address lower;
+
+        // Open the trove and fund the monthly lease with deposit + one period in one call.
+        {
+            uint256 price = IPriceFeed(PRICE_FEED).fetchPrice();
+            uint256 fee = DEBT * IBorrowerOpsConstants(BORROWER_OPS).borrowingRate() / 1e18;
+            uint256 compositeDebt = DEBT + fee + MUSD_GAS_COMPENSATION;
+            uint256 collateral = compositeDebt * 3e18 / price;
+            (upper, lower) = _openHints(collateral, compositeDebt);
+            uint256 deadline = block.timestamp + 1 hours;
+
+            bytes memory openSig = _openSig(collateral, deadline); // sign before the prank
+            vm.prank(landlord);
+            leaseId = escrow.createLeaseMonthly(tenant, DEPOSIT, RENT, PERIOD, PERIODS);
+            vm.prank(tenant);
+            escrow.borrowAndFund{value: collateral}(leaseId, DEBT, upper, lower, openSig, deadline);
+
+            IRentEscrowV2.Lease memory l = escrow.getLease(leaseId);
+            assertTrue(l.monthly);
+            assertEq(l.periodsFunded, 1, "funding covers deposit + the first period only");
+            assertEq(escrow.escrowBalance(leaseId), monthlyFirst);
+            assertEq(IERC20(MUSD).balanceOf(tenant), DEBT - monthlyFirst, "the much bigger surplus came back");
+            assertEq(ITroveManager(TROVE_MANAGER).getTroveDebt(tenant), compositeDebt);
+        }
+
+        // One period later the next rent is due; the tenant signs a fresh WithdrawMUSD for exactly
+        // one period's rent (the hints stay usable: a small debt bump barely moves the position).
+        vm.warp(block.timestamp + PERIOD);
+        {
+            uint256 deadline2 = block.timestamp + 1 hours;
+            uint256 escrowMusdBefore = IERC20(MUSD).balanceOf(address(escrow));
+            uint256 tenantMusdBefore = IERC20(MUSD).balanceOf(tenant);
+            uint256 debtBefore = ITroveManager(TROVE_MANAGER).getTroveDebt(tenant);
+
+            bytes memory paySig = _withdrawSig(RENT, deadline2); // sign before the prank
+            vm.prank(tenant);
+            escrow.withdrawAndPayRent(leaseId, 1, RENT, upper, lower, paySig, deadline2);
+
+            assertEq(escrow.getLease(leaseId).periodsFunded, 2, "one more period paid in");
+            assertEq(escrow.escrowBalance(leaseId), monthlyFirst + RENT);
+            assertEq(IERC20(MUSD).balanceOf(address(escrow)) - escrowMusdBefore, RENT, "exactly the rent arrived");
+            assertEq(IERC20(MUSD).balanceOf(tenant), tenantMusdBefore, "no surplus, so nothing came back");
+            assertEq(IMezoDomain(BORROWER_OPS_SIGNATURES).getNonce(tenant), 2, "the fresh signature was consumed");
+
+            // Mezo's withdraw is a debt-increasing adjustment: the debt grows by the rent plus its
+            // borrowing fee; interest accrued over the warped period can only add more.
+            uint256 rentFee = RENT * IBorrowerOpsConstants(BORROWER_OPS).borrowingRate() / 1e18;
+            uint256 debtAfter = ITroveManager(TROVE_MANAGER).getTroveDebt(tenant);
+            assertGt(debtAfter, debtBefore, "the trove's debt must grow with the rent");
+            assertGe(debtAfter - debtBefore, RENT + rentFee, "debt grew by less than rent + its borrowing fee");
+            assertEq(address(escrow).balance, 0, "only the zero-value BTC touch reached the escrow");
+        }
+    }
 }

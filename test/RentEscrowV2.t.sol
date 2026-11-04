@@ -950,4 +950,456 @@ contract RentEscrowV2Test is Test {
         vm.expectRevert(_invalidState(id, IRentEscrowV2.State.CLOSED));
         escrow.resolveByTimeout(id);
     }
+
+    // ------------------------------------------------------------------ monthly leases
+
+    /// @dev deposit + the first period's rent: what funding a monthly lease costs.
+    uint256 internal constant FIRST = uint256(DEPOSIT) + RENT;
+
+    function _createMonthly() internal returns (uint256 id) {
+        vm.prank(landlord);
+        id = escrow.createLeaseMonthly(tenant, DEPOSIT, RENT, PERIOD, PERIODS);
+    }
+
+    function _fundMonthly(uint256 id) internal {
+        musd.mint(tenant, FIRST);
+        vm.startPrank(tenant);
+        musd.approve(address(escrow), FIRST);
+        escrow.fundLease(id);
+        vm.stopPrank();
+    }
+
+    function _payRent(uint256 id, uint16 count) internal {
+        uint256 amount = uint256(RENT) * count;
+        musd.mint(tenant, amount);
+        vm.startPrank(tenant);
+        musd.approve(address(escrow), amount);
+        escrow.payRent(id, count);
+        vm.stopPrank();
+    }
+
+    function test_Monthly_CreateAndFund_BookDepositPlusOnePeriod() public {
+        vm.expectEmit(address(escrow));
+        emit IRentEscrowV2.LeaseCreatedMonthly(1, landlord, tenant, DEPOSIT, RENT, PERIOD, PERIODS);
+        uint256 id = _createMonthly();
+
+        IRentEscrowV2.Lease memory c = escrow.getLease(id);
+        assertTrue(c.monthly, "the monthly flag is set at creation");
+        assertEq(c.periods, PERIODS, "the term is unchanged");
+        assertEq(c.periodsFunded, 0, "nothing funded yet");
+        assertEq(shares.balanceOf(landlord, id), escrow.SHARES_PER_LEASE(), "shares mint as for prepaid");
+
+        musd.mint(tenant, FIRST);
+        vm.startPrank(tenant);
+        musd.approve(address(escrow), FIRST);
+        vm.expectEmit(address(escrow));
+        emit IRentEscrowV2.LeaseFunded(id, tenant, FIRST, uint64(block.timestamp));
+        escrow.fundLease(id);
+        vm.stopPrank();
+
+        IRentEscrowV2.Lease memory l = escrow.getLease(id);
+        assertEq(uint8(l.state), uint8(IRentEscrowV2.State.ACTIVE));
+        assertEq(l.periodsFunded, 1);
+        assertEq(escrow.escrowBalance(id), FIRST);
+        assertEq(escrow.totalEscrowed(), FIRST);
+        assertEq(musd.balanceOf(address(escrow)), FIRST);
+        assertEq(escrow.tenantStats(tenant).leasesFunded, 1);
+        // The clock is the prepaid lease's: the term still ends after all periods.
+        assertEq(escrow.endTime(id), block.timestamp + uint256(PERIOD) * PERIODS);
+    }
+
+    function test_Monthly_BorrowAndWithdrawFunding_BookOnePeriod() public {
+        uint256 a = _createMonthly();
+        _borrowAndFund(a, TOTAL); // TOTAL >> FIRST: the surplus comes back
+        assertEq(escrow.escrowBalance(a), FIRST, "only deposit + one period is booked");
+        assertEq(escrow.getLease(a).periodsFunded, 1);
+        assertEq(musd.balanceOf(tenant), TOTAL - FIRST, "the surplus was refunded");
+
+        uint256 b = _createMonthly();
+        _withdrawAndFund(b, TOTAL);
+        assertEq(escrow.escrowBalance(b), FIRST);
+        assertEq(escrow.getLease(b).periodsFunded, 1);
+        assertEq(escrow.totalEscrowed(), 2 * FIRST);
+    }
+
+    function test_Monthly_PayRent_PullsExactlyCountPeriods() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+
+        uint256 amount = 2 * uint256(RENT);
+        musd.mint(tenant, amount);
+        vm.startPrank(tenant);
+        musd.approve(address(escrow), amount);
+        vm.expectEmit(address(escrow));
+        emit IRentEscrowV2.RentPaid(id, tenant, 2, amount);
+        escrow.payRent(id, 2);
+        vm.stopPrank();
+
+        IRentEscrowV2.Lease memory l = escrow.getLease(id);
+        assertEq(l.periodsFunded, 3, "one period at funding plus two paid");
+        assertEq(l.periodsClaimed, 0, "paid is not the same as released");
+        assertEq(escrow.escrowBalance(id), uint256(DEPOSIT) + uint256(RENT) * 3);
+        assertEq(escrow.totalEscrowed(), uint256(DEPOSIT) + uint256(RENT) * 3);
+        assertEq(musd.balanceOf(address(escrow)), uint256(DEPOSIT) + uint256(RENT) * 3);
+        IRentEscrowV2.TenantStats memory s = escrow.tenantStats(tenant);
+        assertEq(s.periodsPaid, 0, "nothing released to the landlord yet");
+        assertEq(s.rentPaid, 0);
+    }
+
+    function test_Monthly_PayRent_CapsAtTheUnfundedRemainder() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+
+        _payRent(id, 9); // only 2 periods remain: 9 is capped to 2
+        assertEq(escrow.getLease(id).periodsFunded, 3);
+        assertEq(escrow.escrowBalance(id), uint256(DEPOSIT) + uint256(RENT) * 3);
+        assertEq(musd.balanceOf(tenant), 7 * uint256(RENT), "only the capped amount was pulled");
+
+        vm.prank(tenant);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.RentFullyFunded.selector, id));
+        escrow.payRent(id, 1);
+        vm.prank(tenant);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.RentFullyFunded.selector, id));
+        escrow.payRent(id, 0);
+        assertEq(escrow.escrowBalance(id), uint256(DEPOSIT) + uint256(RENT) * 3, "a refused pay moves nothing");
+    }
+
+    function test_Monthly_PayRent_RevertsForPrepaidNonTenantOrDisputed() public {
+        uint256 prepaid = _createAndFund();
+        vm.prank(tenant);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotMonthly.selector, prepaid));
+        escrow.payRent(prepaid, 1); // a prepaid lease is fully funded from the start
+
+        uint256 id = _createMonthly();
+        vm.prank(tenant);
+        vm.expectRevert(_invalidState(id, IRentEscrowV2.State.CREATED));
+        escrow.payRent(id, 1);
+
+        _fundMonthly(id);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotTenant.selector, id));
+        escrow.payRent(id, 1);
+        vm.prank(landlord);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotTenant.selector, id));
+        escrow.payRent(id, 1);
+
+        _dispute(id);
+        vm.prank(tenant);
+        vm.expectRevert(_invalidState(id, IRentEscrowV2.State.DISPUTED));
+        escrow.payRent(id, 1);
+    }
+
+    function test_Monthly_PayAndWithdrawAndPayRent_RespectTheHumanGate() public {
+        MockHumanVerifier verifier = new MockHumanVerifier();
+        HumanGate gate = new HumanGate(address(this), address(verifier));
+        RentEscrowV2 gated =
+            new RentEscrowV2(IERC20(address(musd)), arbiter, address(0), address(gate), address(mezo), TIMEOUT);
+        verifier.setVerified(tenant, true);
+        vm.prank(landlord);
+        uint256 id = gated.createLeaseMonthly(tenant, DEPOSIT, RENT, PERIOD, PERIODS);
+
+        musd.mint(tenant, FIRST);
+        vm.startPrank(tenant);
+        musd.approve(address(gated), FIRST);
+        gated.fundLease(id);
+        vm.stopPrank();
+
+        verifier.setVerified(tenant, false); // the gate can refuse NEW funding
+        musd.mint(tenant, RENT);
+        vm.startPrank(tenant);
+        musd.approve(address(gated), RENT);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotVerifiedHuman.selector, tenant));
+        gated.payRent(id, 1);
+        vm.stopPrank();
+
+        uint256 deadline = block.timestamp + 1 hours;
+        // The digest names the gated escrow as recipient.
+        bytes memory sig = MezoSignatures.sign(
+            TENANT_KEY,
+            MezoSignatures.withdrawMUSDDigest(
+                address(mezo), RENT, tenant, address(gated), mezo.getNonce(tenant), deadline
+            )
+        );
+        vm.prank(tenant);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotVerifiedHuman.selector, tenant));
+        gated.withdrawAndPayRent(id, 1, RENT, address(0), address(0), sig, deadline);
+        assertEq(mezo.getNonce(tenant), 0, "the trove was never touched");
+
+        verifier.setVerified(tenant, true);
+        vm.prank(tenant);
+        gated.payRent(id, 1); // the approval from above is still in place
+        assertEq(gated.getLease(id).periodsFunded, 2);
+    }
+
+    function test_Monthly_WithdrawAndPayRent_DrawsTheRentFromTheTrove() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        vm.warp(block.timestamp + PERIOD); // the next period comes due
+
+        // Sign before the expectEmit: _withdrawSig reads the mock's nonce (a call in between).
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _withdrawSig(2 * uint256(RENT), deadline);
+        vm.expectEmit(address(escrow));
+        emit IRentEscrowV2.RentPaid(id, tenant, 1, RENT);
+        vm.expectEmit(address(escrow));
+        emit IRentEscrowV2.LeaseBorrowFunded(id, tenant, 2 * uint256(RENT), 2 * uint256(RENT), RENT);
+        vm.prank(tenant);
+        escrow.withdrawAndPayRent(id, 1, 2 * uint256(RENT), address(0), address(0), sig, deadline);
+
+        IRentEscrowV2.Lease memory l = escrow.getLease(id);
+        assertEq(l.periodsFunded, 2);
+        assertEq(escrow.escrowBalance(id), uint256(DEPOSIT) + 2 * uint256(RENT));
+        assertEq(musd.balanceOf(tenant), RENT, "the surplus came back");
+        assertEq(mezo.lastBorrower(), tenant, "the tenant's trove was drawn on");
+        assertEq(mezo.lastRecipient(), address(escrow));
+        assertTrue(mezo.musdWithdrawn());
+        assertEq(mezo.getNonce(tenant), 1, "the signature was consumed");
+        assertEq(address(escrow).balance, 0, "the zero-value BTC touch left nothing");
+    }
+
+    function test_Monthly_WithdrawAndPayRent_RevertsWhenTheMintCoversNoPeriod() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _withdrawSig(RENT - 1, deadline);
+
+        vm.prank(tenant);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.InsufficientBorrowed.selector, id, RENT - 1, RENT));
+        escrow.withdrawAndPayRent(id, 1, RENT - 1, address(0), address(0), sig, deadline);
+
+        assertEq(mezo.getNonce(tenant), 0, "the revert unwound the nonce");
+        assertEq(escrow.getLease(id).periodsFunded, 1);
+        assertEq(escrow.escrowBalance(id), FIRST);
+    }
+
+    function test_Monthly_WithdrawAndPayRent_DisabledReverts() public {
+        RentEscrowV2 disabled =
+            new RentEscrowV2(IERC20(address(musd)), arbiter, address(0), address(0), address(0), TIMEOUT);
+        vm.prank(tenant);
+        vm.expectRevert(IRentEscrowV2.MezoDisabled.selector);
+        disabled.withdrawAndPayRent(1, 1, RENT, address(0), address(0), "", 0);
+    }
+
+    function test_Monthly_ClaimRent_ReleasesOnlyFundedPeriods() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        vm.warp(block.timestamp + 3 * uint256(PERIOD)); // all periods elapsed, one funded
+
+        (uint16 periods, uint256 amount) = escrow.claimable(id);
+        assertEq(periods, 1, "elapsed-but-unfunded periods are not claimable");
+        assertEq(amount, RENT);
+
+        escrow.claimRent(id); // anyone may release; it only goes to the landlord
+        assertEq(musd.balanceOf(landlord), RENT);
+
+        (periods, amount) = escrow.claimable(id);
+        assertEq(periods, 0);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NothingToClaim.selector, id));
+        escrow.claimRent(id);
+
+        _payRent(id, 1); // the escrow only ever releases what was paid in
+        (periods,) = escrow.claimable(id);
+        assertEq(periods, 1);
+    }
+
+    function test_Monthly_ClaimDefault_BeforeTheGraceBoundaryReverts() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        // Period 1 (0-based) is due at start + PERIOD; one full period of grace past that:
+        uint256 dueAt = escrow.getLease(id).startTime + 2 * uint256(PERIOD);
+
+        vm.warp(dueAt - 1);
+        vm.prank(landlord);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotDefaulted.selector, id, dueAt));
+        escrow.claimDefault(id);
+
+        vm.warp(dueAt); // elapsed 2 > funded 1: the default is due
+        vm.prank(landlord);
+        escrow.claimDefault(id);
+        assertEq(uint8(escrow.getLease(id).state), uint8(IRentEscrowV2.State.CLOSED));
+    }
+
+    function test_Monthly_ClaimDefault_SplitsRentForfeitAndDeposit() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id); // escrow holds deposit + one funded period = 400
+        vm.warp(block.timestamp + 2 * uint256(PERIOD)); // past the grace
+
+        vm.expectEmit(address(escrow));
+        emit IRentEscrowV2.LeaseDefaulted(id, landlord, RENT, RENT, DEPOSIT - RENT);
+        vm.prank(landlord);
+        escrow.claimDefault(id);
+
+        IRentEscrowV2.Lease memory l = escrow.getLease(id);
+        assertEq(uint8(l.state), uint8(IRentEscrowV2.State.CLOSED));
+        assertEq(l.periodsClaimed, 1, "the funded period leaves as if claimed");
+        assertEq(escrow.escrowBalance(id), 0);
+        assertEq(escrow.totalEscrowed(), 0);
+        assertEq(musd.balanceOf(landlord), 2 * uint256(RENT), "unclaimed funded rent + one period's forfeit");
+        assertEq(musd.balanceOf(tenant), DEPOSIT - RENT, "the rest of the deposit");
+        assertEq(musd.balanceOf(address(escrow)), 0);
+
+        IRentEscrowV2.TenantStats memory s = escrow.tenantStats(tenant);
+        assertEq(s.leasesDefaulted, 1);
+        assertEq(s.leasesCompleted, 0, "a default is not a completion");
+        assertEq(s.leasesDisputed, 0);
+        assertEq(s.periodsPaid, 1);
+        assertEq(s.rentPaid, RENT);
+        assertEq(s.depositsPosted, DEPOSIT);
+        assertEq(s.depositsReturned, DEPOSIT - RENT);
+    }
+
+    function test_Monthly_ClaimDefault_AfterTheFundedRentWasClaimed() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        vm.warp(block.timestamp + uint256(PERIOD)); // period 0 earned
+        escrow.claimRent(id); // the landlord takes the one funded period
+        assertEq(musd.balanceOf(landlord), RENT);
+
+        vm.warp(block.timestamp + 2 * uint256(PERIOD)); // past the grace
+        vm.prank(landlord);
+        escrow.claimDefault(id);
+
+        assertEq(musd.balanceOf(landlord), 2 * uint256(RENT), "claimed rent + the deposit forfeit");
+        assertEq(musd.balanceOf(tenant), DEPOSIT - RENT);
+        IRentEscrowV2.TenantStats memory s = escrow.tenantStats(tenant);
+        assertEq(s.leasesDefaulted, 1);
+        assertEq(s.periodsPaid, 1);
+        assertEq(s.depositsReturned, DEPOSIT - RENT);
+    }
+
+    function test_Monthly_ClaimDefault_ForfeitIsCappedAtTheDeposit() public {
+        vm.prank(landlord);
+        uint256 id = escrow.createLeaseMonthly(tenant, 50e6, RENT, PERIOD, PERIODS); // deposit < rent
+        musd.mint(tenant, 50e6 + RENT);
+        vm.startPrank(tenant);
+        musd.approve(address(escrow), 50e6 + RENT);
+        escrow.fundLease(id);
+        vm.stopPrank();
+        vm.warp(block.timestamp + 2 * uint256(PERIOD));
+
+        vm.prank(landlord);
+        escrow.claimDefault(id);
+        assertEq(musd.balanceOf(landlord), RENT + 50e6, "funded rent + the whole (small) deposit");
+        assertEq(musd.balanceOf(tenant), 0);
+        assertEq(escrow.tenantStats(tenant).depositsReturned, 0);
+    }
+
+    function test_Monthly_ClaimDefault_OnlyTheLandlordOnADefaultedMonthlyLease() public {
+        uint256 prepaid = _createAndFund();
+        vm.warp(block.timestamp + 5 * uint256(PERIOD));
+        vm.prank(landlord);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotMonthly.selector, prepaid));
+        escrow.claimDefault(prepaid); // a prepaid lease is always fully funded
+
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        vm.warp(block.timestamp + 2 * uint256(PERIOD)); // due
+        vm.prank(tenant);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotLandlord.selector, id));
+        escrow.claimDefault(id);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotLandlord.selector, id));
+        escrow.claimDefault(id);
+
+        vm.prank(landlord);
+        escrow.claimDefault(id); // the landlord settles
+        vm.prank(landlord);
+        vm.expectRevert(_invalidState(id, IRentEscrowV2.State.CLOSED));
+        escrow.claimDefault(id);
+    }
+
+    function test_Monthly_FullyFunded_NeverDefaultsAndClosesNormally() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        _payRent(id, 2); // every period paid in
+        vm.warp(escrow.endTime(id) + 2 * uint256(PERIOD)); // past the end, the close grace and beyond
+
+        uint256 dueAt = escrow.getLease(id).startTime + uint256(PERIOD) * PERIODS + PERIOD;
+        vm.prank(landlord);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.NotDefaulted.selector, id, dueAt));
+        escrow.claimDefault(id); // nothing is unpaid: there is no default
+
+        vm.prank(landlord);
+        escrow.closeLease(id);
+        assertEq(musd.balanceOf(landlord), uint256(RENT) * PERIODS);
+        assertEq(musd.balanceOf(tenant), DEPOSIT);
+        assertEq(escrow.tenantStats(tenant).leasesCompleted, 1);
+    }
+
+    function test_Monthly_CloseLease_RequiresFullFunding() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        vm.warp(escrow.endTime(id) + 2 * uint256(PERIOD)); // term and grace over
+
+        vm.prank(landlord);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.RentNotFullyFunded.selector, id, 1, PERIODS));
+        escrow.closeLease(id);
+        vm.prank(tenant); // anyone past the grace window
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.RentNotFullyFunded.selector, id, 1, PERIODS));
+        escrow.closeLease(id);
+
+        _payRent(id, 2); // top the lease up to full, then close
+        vm.prank(tenant);
+        escrow.closeLease(id);
+        assertEq(musd.balanceOf(landlord), uint256(RENT) * PERIODS);
+        assertEq(musd.balanceOf(tenant), DEPOSIT);
+    }
+
+    function test_Monthly_ResolveByTimeout_SplitsOnlyFundedRentFromTheDeposit() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id);
+        _payRent(id, 1); // funded 2, escrow = deposit + 2 rent = 500
+        vm.warp(block.timestamp + uint256(PERIOD) + uint256(PERIOD) / 2); // one period earned
+        _dispute(id);
+        vm.warp(block.timestamp + TIMEOUT);
+
+        vm.prank(stranger);
+        escrow.resolveByTimeout(id);
+
+        assertEq(musd.balanceOf(landlord), RENT, "rent earned at dispute time, unclaimed");
+        assertEq(musd.balanceOf(tenant), DEPOSIT + RENT, "unearned funded rent + the whole deposit");
+        assertEq(musd.balanceOf(address(escrow)), 0);
+        IRentEscrowV2.TenantStats memory s = escrow.tenantStats(tenant);
+        assertEq(s.leasesDisputed, 1);
+        assertEq(s.periodsPaid, 1);
+        assertEq(s.rentPaid, RENT);
+        assertEq(s.depositsPosted, DEPOSIT);
+        assertEq(s.depositsReturned, DEPOSIT, "unfunded periods never dilute the deposit accounting");
+    }
+
+    function test_Monthly_ResolveDispute_SplitsTheActualEscrowBalance() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id); // 400 in escrow, not the prepaid 600
+        _dispute(id);
+        vm.prank(arbiter);
+        escrow.resolveDispute(id, 5_000);
+
+        assertEq(musd.balanceOf(tenant), FIRST / 2, "half of what the lease actually holds");
+        assertEq(musd.balanceOf(landlord), FIRST / 2);
+        IRentEscrowV2.TenantStats memory s = escrow.tenantStats(tenant);
+        // The tenant's 200 reads as its 100 unearned funded rent plus 100 of the deposit.
+        assertEq(s.depositsReturned, FIRST / 2 - RENT);
+    }
+
+    function test_Monthly_Termination_SettlesOnlyWhatIsInTheEscrow() public {
+        uint256 id = _createMonthly();
+        _fundMonthly(id); // escrow = deposit + one funded period = 400
+        vm.warp(block.timestamp + uint256(PERIOD) / 2); // nothing earned yet
+
+        // The penalty bound is the FUNDED tenant side (400), not the prepaid one (600).
+        vm.prank(tenant);
+        vm.expectRevert(abi.encodeWithSelector(IRentEscrowV2.PenaltyTooHigh.selector, id, 400e6 + 1, 400e6));
+        escrow.proposeTermination(id, 400e6 + 1, uint64(block.timestamp + 1 hours));
+
+        uint64 expiry = uint64(block.timestamp + 1 hours);
+        vm.prank(tenant);
+        escrow.proposeTermination(id, 50e6, expiry);
+        vm.prank(landlord);
+        escrow.acceptTermination(id, _termsHash(id, tenant, 50e6, expiry));
+
+        assertEq(musd.balanceOf(landlord), 50e6, "no rent earned yet: only the penalty");
+        assertEq(musd.balanceOf(tenant), DEPOSIT + RENT - 50e6);
+        assertEq(escrow.tenantStats(tenant).depositsReturned, DEPOSIT - 50e6);
+    }
 }

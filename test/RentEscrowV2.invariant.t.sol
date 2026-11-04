@@ -14,9 +14,10 @@ import {MockBorrowerOperationsSignatures, MintableMUSD} from "./helpers/MockBorr
 import {MezoSignatures} from "./helpers/MezoSignatures.sol";
 
 /// @notice Drives RentEscrowV2 through random lease lifecycles across several actors — including
-///         borrow-and-fund via the Mezo mock, mutual terminations and dispute timeouts — and keeps
-///         an independent ledger of every token transfer out of the escrow (read from the token's
-///         Transfer logs, not from the escrow's own bookkeeping).
+///         monthly leases, borrow-and-fund via the Mezo mock, payRent, defaults, mutual
+///         terminations and dispute timeouts — and keeps an independent ledger of every token
+///         transfer out of the escrow (read from the token's Transfer logs, not from the escrow's
+///         own bookkeeping).
 contract EscrowV2Handler is Test {
     bytes32 internal constant TRANSFER_SIG = keccak256("Transfer(address,address,uint256)");
 
@@ -53,6 +54,12 @@ contract EscrowV2Handler is Test {
     // INV-6: the unbooked pot — MUSD that reached the escrow without a lease (a stray transfer,
     // the shape a front-run relay leaves behind), returned only by the arbiter
     uint256 public ghostUnbooked;
+
+    // INV-7: per-lease ledger — what was booked INTO the lease (funding + payRent; a borrow-path
+    // surplus refund never enters it) against what the escrow paid OUT to that lease's parties.
+    // Funding-path refunds to the tenant are deliberately excluded: they were never lease money.
+    mapping(uint256 => uint256) public ghostLeasePaidIn;
+    mapping(uint256 => uint256) public ghostLeasePaidOut;
 
     mapping(bytes32 => uint256) public calls;
 
@@ -97,6 +104,30 @@ contract EscrowV2Handler is Test {
         uint32 periodSeconds,
         uint16 periods
     ) external useTime {
+        _createLease(landlordSeed, tenantSeed, deposit, rent, periodSeconds, periods, false);
+    }
+
+    /// @dev The same shape, as a monthly lease: funding will cover deposit + one period only.
+    function createLeaseMonthly(
+        uint256 landlordSeed,
+        uint256 tenantSeed,
+        uint128 deposit,
+        uint128 rent,
+        uint32 periodSeconds,
+        uint16 periods
+    ) external useTime {
+        _createLease(landlordSeed, tenantSeed, deposit, rent, periodSeconds, periods, true);
+    }
+
+    function _createLease(
+        uint256 landlordSeed,
+        uint256 tenantSeed,
+        uint128 deposit,
+        uint128 rent,
+        uint32 periodSeconds,
+        uint16 periods,
+        bool monthly
+    ) internal {
         address landlord = actors[landlordSeed % actors.length];
         address tenant = actors[tenantSeed % actors.length];
         if (tenant == landlord) tenant = actors[(tenantSeed % actors.length + 1) % actors.length];
@@ -106,9 +137,15 @@ contract EscrowV2Handler is Test {
         periodSeconds = uint32(bound(periodSeconds, 60, 6 hours));
         periods = uint16(bound(periods, 1, 12));
 
-        vm.prank(landlord);
-        escrow.createLease(tenant, deposit, rent, periodSeconds, periods);
-        calls["createLease"]++;
+        if (monthly) {
+            vm.prank(landlord);
+            escrow.createLeaseMonthly(tenant, deposit, rent, periodSeconds, periods);
+            calls["createLeaseMonthly"]++;
+        } else {
+            vm.prank(landlord);
+            escrow.createLease(tenant, deposit, rent, periodSeconds, periods);
+            calls["createLease"]++;
+        }
     }
 
     function cancelLease(uint256 seed) external useTime {
@@ -124,7 +161,7 @@ contract EscrowV2Handler is Test {
         uint256 id = _find(seed, IRentEscrowV2.State.CREATED);
         if (id == 0) return;
         IRentEscrowV2.Lease memory l = escrow.getLease(id);
-        uint256 total = uint256(l.deposit) + uint256(l.rentPerPeriod) * l.periods;
+        uint256 total = _owedAtFunding(l);
 
         musd.mint(l.tenant, total);
         ghostMinted[l.tenant] += total;
@@ -134,6 +171,7 @@ contract EscrowV2Handler is Test {
         vm.prank(l.tenant);
         escrow.fundLease(id);
         ghostPaidIn[l.tenant] += total;
+        ghostLeasePaidIn[id] += total;
         _outflows(id); // funding must not move anything out
         calls["fundLease"]++;
     }
@@ -146,7 +184,7 @@ contract EscrowV2Handler is Test {
         uint256 id = _find(seed, IRentEscrowV2.State.CREATED);
         if (id == 0) return;
         IRentEscrowV2.Lease memory l = escrow.getLease(id);
-        uint256 owed = uint256(l.deposit) + uint256(l.rentPerPeriod) * l.periods;
+        uint256 owed = _owedAtFunding(l);
         uint256 debt = owed + bound(surplus, 0, 500e6);
         uint256 value = bound(collateral, 0, 0.05 ether);
         uint256 deadline = currentTime + 1 hours;
@@ -163,6 +201,7 @@ contract EscrowV2Handler is Test {
         (uint256 toTenant, uint256 toLandlord) = _outflows(id);
 
         if (toTenant != debt - owed || toLandlord != 0) ghostWrongPayout++;
+        ghostLeasePaidIn[id] += owed;
         calls["borrowAndFund"]++;
     }
 
@@ -171,7 +210,7 @@ contract EscrowV2Handler is Test {
         uint256 id = _find(seed, IRentEscrowV2.State.CREATED);
         if (id == 0) return;
         IRentEscrowV2.Lease memory l = escrow.getLease(id);
-        uint256 owed = uint256(l.deposit) + uint256(l.rentPerPeriod) * l.periods;
+        uint256 owed = _owedAtFunding(l);
         uint256 debt = owed + bound(surplus, 0, 500e6);
         uint256 deadline = currentTime + 1 hours;
         bytes memory sig = MezoSignatures.sign(
@@ -187,7 +226,61 @@ contract EscrowV2Handler is Test {
         (uint256 toTenant, uint256 toLandlord) = _outflows(id);
 
         if (toTenant != debt - owed || toLandlord != 0) ghostWrongPayout++;
+        ghostLeasePaidIn[id] += owed;
         calls["withdrawAndFund"]++;
+    }
+
+    /// @dev What funding a lease costs the way the escrow computes it: prepaid = deposit + all
+    ///      rent, monthly = deposit + the first period only.
+    function _owedAtFunding(IRentEscrowV2.Lease memory l) internal pure returns (uint256) {
+        uint256 fundedPeriods = l.monthly ? 1 : l.periods;
+        return uint256(l.deposit) + uint256(l.rentPerPeriod) * fundedPeriods;
+    }
+
+    /// @dev The tenant tops up a monthly lease with a bounded count of further periods.
+    function payRent(uint256 seed, uint16 count) external useTime {
+        uint256 id = _findPayable(seed);
+        if (id == 0) return;
+        IRentEscrowV2.Lease memory l = escrow.getLease(id);
+        count = uint16(bound(count, 1, l.periods - l.periodsFunded));
+        uint256 amount = uint256(l.rentPerPeriod) * count;
+
+        musd.mint(l.tenant, amount);
+        ghostMinted[l.tenant] += amount;
+        vm.prank(l.tenant);
+        musd.approve(address(escrow), amount);
+        vm.recordLogs();
+        vm.prank(l.tenant);
+        escrow.payRent(id, count);
+        ghostPaidIn[l.tenant] += amount;
+        ghostLeasePaidIn[id] += amount;
+        _outflows(id); // payRent must move nothing out
+        calls["payRent"]++;
+    }
+
+    /// @dev The landlord defaults an underfunded monthly lease once its grace has passed; the
+    ///      mechanical split is checked exactly (funded unclaimed rent + one period's rent out of
+    ///      the deposit to the landlord, the rest of the deposit to the tenant).
+    function claimDefault(uint256 seed) external useTime {
+        uint256 id = _findDefaultable(seed);
+        if (id == 0) return;
+        IRentEscrowV2.Lease memory l = escrow.getLease(id);
+        uint256 rentPart = uint256(l.periodsFunded - l.periodsClaimed) * l.rentPerPeriod;
+        uint256 forfeit = uint256(l.rentPerPeriod) < uint256(l.deposit) ? uint256(l.rentPerPeriod) : uint256(l.deposit);
+
+        uint256 before = escrow.escrowBalance(id);
+        vm.recordLogs();
+        vm.prank(l.landlord);
+        escrow.claimDefault(id);
+        (uint256 toTenant, uint256 toLandlord) = _outflows(id);
+
+        if (toLandlord != rentPart + forfeit || toTenant != uint256(l.deposit) - forfeit) ghostWrongPayout++;
+        ghostRentReleased[id] += rentPart;
+        ghostLeasePaidOut[id] += toTenant + toLandlord;
+        ghostResolved[id] = true; // a default settles the whole remaining escrow, like a ruling
+        ghostEscrowAtResolve[id] = before;
+        ghostResolvePayout[id] = toTenant + toLandlord;
+        calls["claimDefault"]++;
     }
 
     function warp(uint256 secs) external {
@@ -207,6 +300,7 @@ contract EscrowV2Handler is Test {
 
         if (toTenant != 0 || toLandlord != expected) ghostWrongPayout++;
         ghostRentReleased[id] += toLandlord;
+        ghostLeasePaidOut[id] += toTenant + toLandlord;
         calls["claimRent"]++;
     }
 
@@ -223,9 +317,11 @@ contract EscrowV2Handler is Test {
         escrow.closeLease(id);
         (uint256 toTenant, uint256 toLandlord) = _outflows(id);
 
-        uint256 rentDue = uint256(l.rentPerPeriod) * (l.periods - l.periodsClaimed);
+        // _findClosable only returns fully funded leases, so funded == periods here.
+        uint256 rentDue = uint256(l.rentPerPeriod) * (l.periodsFunded - l.periodsClaimed);
         if (toTenant != l.deposit || toLandlord != rentDue) ghostWrongPayout++;
         ghostRentReleased[id] += toLandlord;
+        ghostLeasePaidOut[id] += toTenant + toLandlord;
         calls["closeLease"]++;
     }
 
@@ -253,6 +349,7 @@ contract EscrowV2Handler is Test {
         ghostResolved[id] = true;
         ghostEscrowAtResolve[id] = before;
         ghostResolvePayout[id] = toTenant + toLandlord;
+        ghostLeasePaidOut[id] += toTenant + toLandlord;
         if (toTenant != before * tenantBps / 10_000 || toTenant + toLandlord != before) ghostBadSplit++;
         calls["resolveDispute"]++;
     }
@@ -272,18 +369,21 @@ contract EscrowV2Handler is Test {
         ghostResolved[id] = true;
         ghostEscrowAtResolve[id] = before;
         ghostResolvePayout[id] = toTenant + toLandlord;
+        ghostLeasePaidOut[id] += toTenant + toLandlord;
         if (toTenant + toLandlord != before) ghostBadSplit++;
         calls["resolveByTimeout"]++;
     }
 
     /// @dev Either party proposes a fresh termination with a bounded penalty and a future expiry.
+    ///      The tenant side is the FUNDED one (the contract's _tenantSide caps elapsed at
+    ///      periodsFunded), so the bound never over- or under-shoots for a monthly lease.
     function proposeTermination(uint256 seed, bool byLandlord, uint128 penalty, uint256 horizon) external useTime {
         uint256 id = _find(seed, IRentEscrowV2.State.ACTIVE);
         if (id == 0) return;
         IRentEscrowV2.Lease memory l = escrow.getLease(id);
         uint256 elapsed = (block.timestamp - l.startTime) / l.periodSeconds;
-        if (elapsed > l.periods) elapsed = l.periods;
-        uint256 tenantSide = uint256(l.deposit) + uint256(l.periods - elapsed) * l.rentPerPeriod;
+        if (elapsed > l.periodsFunded) elapsed = l.periodsFunded;
+        uint256 tenantSide = uint256(l.deposit) + uint256(l.periodsFunded - elapsed) * l.rentPerPeriod;
         penalty = uint128(bound(penalty, 0, tenantSide));
         uint64 expiry = uint64(block.timestamp + bound(horizon, 1, 48 hours));
 
@@ -303,7 +403,8 @@ contract EscrowV2Handler is Test {
             if (p.proposer == address(0) || block.timestamp >= p.expiry) continue;
             IRentEscrowV2.Lease memory l = escrow.getLease(id);
             (uint16 due,) = escrow.claimable(id);
-            uint256 tenantSide = uint256(l.deposit) + uint256(l.periods - (l.periodsClaimed + due)) * l.rentPerPeriod;
+            uint256 tenantSide =
+                uint256(l.deposit) + uint256(l.periodsFunded - (l.periodsClaimed + due)) * l.rentPerPeriod;
             if (p.penaltyToLandlord > tenantSide) continue;
 
             uint256 before = escrow.escrowBalance(id);
@@ -317,6 +418,7 @@ contract EscrowV2Handler is Test {
             ghostResolved[id] = true;
             ghostEscrowAtResolve[id] = before;
             ghostResolvePayout[id] = toTenant + toLandlord;
+            ghostLeasePaidOut[id] += toTenant + toLandlord;
             if (toTenant + toLandlord != before) ghostBadSplit++;
             calls["acceptTermination"]++;
             return;
@@ -429,11 +531,43 @@ contract EscrowV2Handler is Test {
         return 0;
     }
 
+    /// @dev Fully funded only: closeLease reverts RentNotFullyFunded on an underfunded monthly
+    ///      lease (that one belongs to claimDefault), and fail_on_revert is on.
     function _findClosable(uint256 seed) internal view returns (uint256) {
         uint256 n = _count();
         for (uint256 i; i < n; i++) {
             uint256 id = 1 + (seed % n + i) % n;
-            if (escrow.getLease(id).state == IRentEscrowV2.State.ACTIVE && block.timestamp >= escrow.endTime(id)) {
+            IRentEscrowV2.Lease memory l = escrow.getLease(id);
+            if (
+                l.state == IRentEscrowV2.State.ACTIVE && l.periodsFunded == l.periods
+                    && block.timestamp >= escrow.endTime(id)
+            ) {
+                return id;
+            }
+        }
+        return 0;
+    }
+
+    /// @dev An ACTIVE monthly lease with periods still to fund.
+    function _findPayable(uint256 seed) internal view returns (uint256) {
+        uint256 n = _count();
+        for (uint256 i; i < n; i++) {
+            uint256 id = 1 + (seed % n + i) % n;
+            IRentEscrowV2.Lease memory l = escrow.getLease(id);
+            if (l.state == IRentEscrowV2.State.ACTIVE && l.monthly && l.periodsFunded < l.periods) return id;
+        }
+        return 0;
+    }
+
+    /// @dev An ACTIVE monthly lease whose unfunded period is one full period (the grace) past due.
+    function _findDefaultable(uint256 seed) internal view returns (uint256) {
+        uint256 n = _count();
+        for (uint256 i; i < n; i++) {
+            uint256 id = 1 + (seed % n + i) % n;
+            IRentEscrowV2.Lease memory l = escrow.getLease(id);
+            if (l.state != IRentEscrowV2.State.ACTIVE || !l.monthly || l.periodsFunded >= l.periods) continue;
+            if (block.timestamp >= uint256(l.startTime) + uint256(l.periodsFunded) * l.periodSeconds + l.periodSeconds)
+            {
                 return id;
             }
         }
@@ -485,34 +619,37 @@ contract RentEscrowV2InvariantTest is Test {
 
         handler = new EscrowV2Handler(escrow, musd, mezo, arbiter, keeper, actors, keys);
 
-        bytes4[] memory selectors = new bytes4[](16);
+        bytes4[] memory selectors = new bytes4[](19);
         selectors[0] = EscrowV2Handler.createLease.selector;
-        selectors[1] = EscrowV2Handler.cancelLease.selector;
-        selectors[2] = EscrowV2Handler.fundLease.selector;
-        selectors[3] = EscrowV2Handler.borrowAndFund.selector;
-        selectors[4] = EscrowV2Handler.withdrawAndFund.selector;
-        selectors[5] = EscrowV2Handler.warp.selector;
-        selectors[6] = EscrowV2Handler.claimRent.selector;
-        selectors[7] = EscrowV2Handler.closeLease.selector;
-        selectors[8] = EscrowV2Handler.openDispute.selector;
-        selectors[9] = EscrowV2Handler.resolveDispute.selector;
-        selectors[10] = EscrowV2Handler.resolveByTimeout.selector;
-        selectors[11] = EscrowV2Handler.proposeTermination.selector;
-        selectors[12] = EscrowV2Handler.acceptTermination.selector;
-        selectors[13] = EscrowV2Handler.withdrawTermination.selector;
-        selectors[14] = EscrowV2Handler.strayTransfer.selector;
-        selectors[15] = EscrowV2Handler.returnUnbooked.selector;
+        selectors[1] = EscrowV2Handler.createLeaseMonthly.selector;
+        selectors[2] = EscrowV2Handler.cancelLease.selector;
+        selectors[3] = EscrowV2Handler.fundLease.selector;
+        selectors[4] = EscrowV2Handler.borrowAndFund.selector;
+        selectors[5] = EscrowV2Handler.withdrawAndFund.selector;
+        selectors[6] = EscrowV2Handler.payRent.selector;
+        selectors[7] = EscrowV2Handler.warp.selector;
+        selectors[8] = EscrowV2Handler.claimRent.selector;
+        selectors[9] = EscrowV2Handler.closeLease.selector;
+        selectors[10] = EscrowV2Handler.openDispute.selector;
+        selectors[11] = EscrowV2Handler.resolveDispute.selector;
+        selectors[12] = EscrowV2Handler.resolveByTimeout.selector;
+        selectors[13] = EscrowV2Handler.proposeTermination.selector;
+        selectors[14] = EscrowV2Handler.acceptTermination.selector;
+        selectors[15] = EscrowV2Handler.withdrawTermination.selector;
+        selectors[16] = EscrowV2Handler.strayTransfer.selector;
+        selectors[17] = EscrowV2Handler.returnUnbooked.selector;
+        selectors[18] = EscrowV2Handler.claimDefault.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
 
     /// Coverage guard, not an escrow invariant: every run must settle at least one lease (close,
-    /// ruling, timeout or accepted termination), so INV-1..INV-6 are checked against real payouts
-    /// and not just creation and funding. Kept loose on purpose: at depth 256 each path is hit in
-    /// nearly every run, but a per-path minimum could flake.
+    /// ruling, timeout, accepted termination or a default), so INV-1..INV-7 are checked against
+    /// real payouts and not just creation and funding. Kept loose on purpose: at depth 256 each
+    /// path is hit in nearly every run, but a per-path minimum could flake.
     function afterInvariant() public {
         uint256 settled = handler.calls("closeLease") + handler.calls("resolveDispute")
-            + handler.calls("resolveByTimeout") + handler.calls("acceptTermination");
+            + handler.calls("resolveByTimeout") + handler.calls("acceptTermination") + handler.calls("claimDefault");
         assertGt(settled, 0, "run settled no lease: the handler never reached a settlement");
     }
 
@@ -537,9 +674,10 @@ contract RentEscrowV2InvariantTest is Test {
         }
     }
 
-    /// INV-2: each lease's escrowBalance is exactly its remaining terms, and the balances sum to
-    /// totalEscrowed. The token balance may sit above the sum: that difference is the unbooked pot
-    /// (INV-6), which belongs to no lease.
+    /// INV-2: each lease's escrowBalance is exactly its remaining terms (deposit + FUNDED unclaimed
+    /// rent — for a prepaid lease periodsFunded == periods, so the formula is the V1 one), and the
+    /// balances sum to totalEscrowed. The token balance may sit above the sum: that difference is
+    /// the unbooked pot (INV-6), which belongs to no lease.
     function invariant_INV2_EscrowBalancesSumToTotalEscrowed() public {
         uint256 n = escrow.nextLeaseId();
         uint256 sum;
@@ -548,7 +686,11 @@ contract RentEscrowV2InvariantTest is Test {
             uint256 bal = escrow.escrowBalance(id);
             sum += bal;
             if (l.state == IRentEscrowV2.State.ACTIVE || l.state == IRentEscrowV2.State.DISPUTED) {
-                assertEq(bal, uint256(l.deposit) + uint256(l.rentPerPeriod) * (l.periods - l.periodsClaimed));
+                assertEq(
+                    bal,
+                    uint256(l.deposit) + uint256(l.rentPerPeriod) * (l.periodsFunded - l.periodsClaimed),
+                    "live lease holds other than deposit + funded unclaimed rent"
+                );
             } else {
                 assertEq(bal, 0, "settled/unfunded lease holds escrow");
             }
@@ -590,14 +732,17 @@ contract RentEscrowV2InvariantTest is Test {
 
     /// INV-5: a lease is only ever booked as funded with at least the MUSD its terms require, and
     /// never with more than arrived: any surplus is refunded to the tenant in the same transaction.
+    /// "Its terms" follows the funding mode: deposit + all rent prepaid, deposit + the periods paid
+    /// in so far on a monthly lease (never more than the full term).
     function invariant_INV5_BorrowFundingBooksExactlyWhatArrived() public {
         uint256 n = escrow.nextLeaseId();
         for (uint256 id = 1; id < n; id++) {
             IRentEscrowV2.Lease memory l = escrow.getLease(id);
-            uint256 owed = uint256(l.deposit) + uint256(l.rentPerPeriod) * l.periods;
-            assertLe(escrow.escrowBalance(id), owed, "lease holds more than its terms require");
+            uint256 owed = uint256(l.deposit) + uint256(l.rentPerPeriod) * l.periodsFunded;
+            assertLe(escrow.escrowBalance(id), owed, "lease holds more than its funded terms require");
+            assertLe(owed, uint256(l.deposit) + uint256(l.rentPerPeriod) * l.periods, "funded past the term");
             if (l.state == IRentEscrowV2.State.ACTIVE && l.periodsClaimed == 0) {
-                assertEq(escrow.escrowBalance(id), owed, "an unclaimed live lease holds exactly deposit + all rent");
+                assertEq(escrow.escrowBalance(id), owed, "an unclaimed live lease holds exactly deposit + funded rent");
             }
         }
     }
@@ -617,5 +762,25 @@ contract RentEscrowV2InvariantTest is Test {
             "balance beyond totalEscrowed != unbooked ledger"
         );
         assertEq(escrow.unbookedBalance(), handler.ghostUnbooked(), "unbookedBalance() != ledger");
+    }
+
+    /// INV-7: no lease ever pays out more than it took in. The handler's per-lease ledger books
+    /// every MUSD the escrow booked INTO the lease (funding + payRent; borrow-path surplus refunds
+    /// never enter it — they were never lease money) against every MUSD the escrow paid OUT to that
+    /// lease's parties. A settled (CLOSED/CANCELLED) lease must have paid out exactly what it took
+    /// in; a live one at most that.
+    function invariant_INV7_NoLeasePaysOutMoreThanItTookIn() public {
+        uint256 n = escrow.nextLeaseId();
+        for (uint256 id = 1; id < n; id++) {
+            assertLe(handler.ghostLeasePaidOut(id), handler.ghostLeasePaidIn(id), "lease paid out more than it took in");
+            IRentEscrowV2.State s = escrow.getLease(id).state;
+            if (s == IRentEscrowV2.State.CLOSED || s == IRentEscrowV2.State.CANCELLED) {
+                assertEq(
+                    handler.ghostLeasePaidOut(id),
+                    handler.ghostLeasePaidIn(id),
+                    "settled lease did not pay out exactly what it took in"
+                );
+            }
+        }
     }
 }
