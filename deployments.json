@@ -34,5 +34,16 @@
     "demoLandlordTx": "0x1541f38fb8d54b25c6a8fd0c733da297491abb37e4800dcf79c29a39b8e4c4cf",
     "demoLandlordAllowlistTx": "0xc544adf99266b66b05adef74e1592d867deb07a4a0984cd172c1fafb1260d32a",
     "demoLandlordTerms": "20 MUSD deposit, 10 MUSD / 60s x 3"
+  },
+  "mezoTestnetV2": {
+    "arbiter": "0x1da334A5FaB59a741fDAE7f081c7f592027b3106",
+    "borrowerOpsSignatures": "0xD757e3646AF370b15f32EB557F0F8380Df7D639e",
+    "chainId": 31611,
+    "deployer": "0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6",
+    "disputeTimeout": 600,
+    "humanGate": "0x00dBe18F1c6Db528006f9b1f34dD7175b3a40015",
+    "leaseShare1155": "0x3AB4362aA7DCB062CA03791730f1641ca1898dE6",
+    "rentEscrowV2": "0xdD4A5747d336Bb6653a5430d87CdaAc89dd9113e",
+    "token": "0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503"
   }
 }
