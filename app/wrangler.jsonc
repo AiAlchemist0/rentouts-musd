@@ -1,5 +1,7 @@
 {
   // Static Mezo lease app. Deploy: npm run build && npx wrangler deploy
+  // Lives on the personal Cloudflare account. A bare `wrangler deploy` uses the login default (another account).
+  "account_id": "fd3c1d3bddf094ff49d409326ba2c2ee",
   "name": "rentouts-mezo",
   "compatibility_date": "2026-10-01",
   "assets": { "directory": "./dist", "not_found_handling": "single-page-application" },
