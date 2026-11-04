@@ -13,7 +13,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 | **Existing product** | https://rentouts.co — long-term rental marketplace (6–24 month homes, not nightly stays) |
 | **Buildathon** | Mezo Buildathon, Wave 1 · Track 2: Access and Distribution |
 | **Chain** | Mezo testnet, chain id 31611 · gas in BTC · MUSD `0x1189…c503` |
-| **Contracts** | Verified on Sourcify (exact match) · 104 Foundry tests incl. an invariant suite · 117 app tests |
+| **Contracts** | Verified on Sourcify (exact match) · 194 Foundry tests incl. two invariant suites · 117 app tests |
 | **Team** | AiAlchemist · X [@RentOuts](https://x.com/RentOuts) |
 
 ![RentOuts on Mezo: keep your bitcoin, pay your rent](docs/img/home.png)
@@ -249,7 +249,7 @@ Full transaction log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 
 ## RentEscrowV2 (Wave 2)
 
-`RentEscrowV2` (`src/RentEscrowV2.sol`) is the Wave-2 escrow: the deployed V1 behaviour unchanged, plus three of the Wave-2 row's four items (pay-as-you-go monthly funding is the remaining one). Deployed on Mezo testnet at [`0xdD4A5747d336Bb6653a5430d87CdaAc89dd9113e`](https://explorer.test.mezo.org/address/0xdD4A5747d336Bb6653a5430d87CdaAc89dd9113e) (Sourcify exact match; dispute timeout 600 s for the demo), recorded under `mezoTestnetV2` in `deployments.json` by `script/DeployEscrowV2.s.sol`. The `Limitations` above describe V1; of those, "no mutual early termination" and "a dispute has no timeout" are what this section adds.
+`RentEscrowV2` (`src/RentEscrowV2.sol`) is the Wave-2 escrow: the deployed V1 behaviour unchanged, plus all four items of the Wave-2 row — borrow-and-fund in one transaction, mutual early termination, a dispute timeout, and pay-monthly funding drawn from the tenant's Mezo trove. The deployment recorded under `mezoTestnetV2` in `deployments.json` ([`0xdD4A5747d336Bb6653a5430d87CdaAc89dd9113e`](https://explorer.test.mezo.org/address/0xdD4A5747d336Bb6653a5430d87CdaAc89dd9113e), Sourcify exact match; dispute timeout 600 s for the demo, recorded by `script/DeployEscrowV2.s.sol`) predates pay-monthly: the contract is immutable, so the monthly build is deployed fresh from the same script at a new address. The `Limitations` above describe V1; of those, "no mutual early termination", "a dispute has no timeout" and "the whole lease is prepaid" are what this section adds.
 
 **Borrow-and-fund in one transaction — `borrowAndFund` / `withdrawAndFund`.** A tenant with BTC but no MUSD signs one Mezo `OpenTrove` (or `WithdrawMUSD`) EIP-712 message naming the escrow as recipient; a single call opens — or draws on — the tenant's own trove and funds the lease with the minted MUSD, refunding any surplus in the same transaction. *Trust model:* the escrow never holds the BTC — `msg.value` goes straight into the tenant's trove, which only the tenant's signature can move; the MUSD received is measured as a balance delta (never taken from the signed numbers), and anything short of deposit + all rent reverts the whole transaction. The relay itself is Mezo's `BorrowerOperationsSignatures`; configuring `address(0)` disables both paths.
 
@@ -259,7 +259,9 @@ Full transaction log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 
 **Dispute timeout — `resolveByTimeout`.** A dispute frozen for `disputeTimeout` (immutable, 30 days by default) can be settled by anyone: the landlord takes the rent earned up to the dispute, the tenant the rest. *Trust model:* the arbiter's power is unchanged while it acts in time; after the timeout nobody can hold the funds hostage, because the split is mechanical, from data the contract already keeps. Whichever resolution comes first — arbiter ruling or timeout — wins.
 
-`test/RentEscrowV2.fork.t.sol` proves the borrow path against real testnet state at a pinned block: one transaction opens the tenant's trove and funds the lease, the recipient receives exactly `debtAmount`, and the surplus comes back to the tenant.
+**Pay monthly from your trove — `createLeaseMonthly` / `payRent` / `withdrawAndPayRent` / `claimDefault`.** A landlord may create the lease as *monthly*: funding covers the deposit plus **one** period's rent, and each month the tenant signs a single Mezo `WithdrawMUSD` message while `withdrawAndPayRent` draws that month's rent straight from the tenant's trove into the escrow — rent paid from your bitcoin, month by month, without selling it (`payRent` does the same from a plain MUSD balance and approval). The term, the clock and the period-by-period release are the prepaid lease's; rent is only ever released for periods that were actually funded, and every settlement (dispute ruling, timeout, mutual termination, close) splits exactly what the lease holds: `deposit + (funded − claimed) × rent`. *Default rule:* period *i* (0-based) is due at `startTime + i × periodSeconds`; if an unfunded period runs one full period — the grace — past its due date, the landlord may call `claimDefault`: the landlord takes the funded-but-unclaimed rent plus **at most one unpaid period's rent out of the deposit** (capped at the deposit), the tenant gets the rest of the deposit, and the lease closes with `leasesDefaulted` on the tenant's record. *Trust model:* the escrow never holds or moves the BTC — the trove stays the tenant's own, drawn on only by the tenant's signature naming the escrow as recipient; the MUSD received is measured as a balance delta (never the signed numbers) with any surplus refunded in the same transaction; and no party can reach unfunded rent — the deposit forfeit is capped mechanically at one period's rent, so a tenant who paid deposit + *n* periods can never lose more than one period they did not pay.
+
+`test/RentEscrowV2.fork.t.sol` proves the borrow path against real testnet state at a pinned block: one transaction opens the tenant's trove and funds the lease, the recipient receives exactly `debtAmount`, and the surplus comes back to the tenant — and the monthly path does it twice: the same call funds a monthly lease with deposit + one period, then a fresh `WithdrawMUSD` signature pays the next period from the same trove, with the debt growing by the rent.
 
 ## Roadmap
 
@@ -275,12 +277,14 @@ Full transaction log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 rentouts-musd/
 ├── src/
 │   ├── RentEscrow.sol          escrow: create · fund · claimRent · close · dispute
+│   ├── RentEscrowV2.sol        Wave-2 escrow: borrow-and-fund · termination · timeout · monthly
 │   ├── LeaseShare1155.sol      ERC-1155 lease shares with a compliance allowlist
 │   ├── DemoLandlord.sol        a landlord anyone can rent from (one-wallet demo)
+│   ├── DemoLandlordV2.sol      the same for the Wave-2 escrow, prepaid or monthly
 │   ├── HumanGate.sol           optional "verified human" gate for funding (off on Mezo)
-│   └── interfaces/             IRentEscrow (lifecycle + invariants), IHumanGate
-├── test/                       104 Foundry tests, incl. RentEscrow.invariant.t.sol
-├── script/                     DeployEscrow.s.sol, DeployDemoLandlord.s.sol
+│   └── interfaces/             IRentEscrow, IRentEscrowV2 (lifecycle + invariants), IHumanGate
+├── test/                       194 Foundry tests, incl. both invariant suites
+├── script/                     DeployEscrow(V2).s.sol, DeployDemoLandlord(V2).s.sol
 ├── deployments.json            live addresses ("mezoTestnet")
 ├── .mezo/                      Mezo protocol ABIs + a raw eth_call helper
 ├── app/                        the web app (React 19, Vite, wagmi + viem)
@@ -297,7 +301,7 @@ Contracts ([Foundry](https://book.getfoundry.sh/)):
 
 ```bash
 forge install
-forge test                     # 104 tests, including the invariant suite
+forge test                     # 194 tests, including both invariant suites
 ```
 
 App:

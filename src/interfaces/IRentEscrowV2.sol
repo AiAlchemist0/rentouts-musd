@@ -16,18 +16,30 @@ pragma solidity ^0.8.24;
 ///                arbiter has left open longer than the immutable disputeTimeout: earned rent
 ///                (as of the dispute) to the landlord, everything else to the tenant.
 ///
-///         This interface intentionally does NOT extend IRentEscrow: TenantStats gains a field
-///         (leasesTerminatedEarly), and a struct cannot be re-declared in a derived interface, so
-///         V2 restates the V1 surface verbatim with that one change. Lifecycle and invariants are
-///         IRentEscrow's, with INV-4 generalized: a resolution (arbiter ruling, dispute timeout or
-///         accepted mutual termination) pays out exactly the lease's remaining escrow. New
-///         invariants cover the funding paths and the unbooked pot:
-///         INV-5  a lease is only ever booked as funded with at least the MUSD its terms require,
+///         This interface intentionally does NOT extend IRentEscrow: TenantStats gains fields
+///         (leasesTerminatedEarly, leasesDefaulted), and a struct cannot be re-declared in a
+///         derived interface, so V2 restates the V1 surface verbatim with those changes. Lifecycle
+///         and invariants are IRentEscrow's, with INV-4 generalized: a resolution (arbiter ruling,
+///         dispute timeout, accepted mutual termination or a default claim) pays out exactly the
+///         lease's remaining escrow. New invariants cover the funding paths and the unbooked pot:
+///         INV-5  a lease is only ever booked as funded with at least the MUSD its terms require
+///                (a prepaid lease: deposit + every period's rent; a monthly lease: deposit + the
+///                first period's rent at funding, then exactly count periods' rent per payRent),
 ///                and never with more than arrived: any surplus is refunded to the tenant in the
 ///                same transaction;
 ///         INV-6  totalEscrowed always equals the sum of every lease's escrowBalance, and the
 ///                escrow's token balance is never below it: the unbooked MUSD (balance -
 ///                totalEscrowed) is what the arbiter may hand back via returnUnbooked.
+///
+///         On top of the three Wave-2 additions above, a landlord may create a lease as MONTHLY
+///         ({createLeaseMonthly}): funding covers the deposit plus ONE period's rent, and the
+///         tenant tops up period by period with {payRent} (an MUSD transferFrom) or
+///         {withdrawAndPayRent} (a Mezo WithdrawMUSD signature that mints the rent straight out of
+///         the tenant's trove — "rent paid from your bitcoin, month by month, without selling it").
+///         Rent can only be released for funded periods, and a tenant who stops paying defaults
+///         after a grace of one full period: {claimDefault} then gives the landlord the funded
+///         unclaimed rent plus at most ONE period's rent out of the deposit, and the tenant the
+///         rest of the deposit.
 interface IRentEscrowV2 {
     enum State {
         NONE,
@@ -46,7 +58,9 @@ interface IRentEscrowV2 {
         uint32 periodSeconds; // >= MIN_PERIOD; short periods make a live demo possible
         uint16 periods; // lease term, in periods
         uint16 periodsClaimed; // rent periods already released to the landlord
+        uint16 periodsFunded; // rent periods paid into the escrow (a prepaid lease: == periods)
         uint64 startTime; // set when the tenant funds
+        bool monthly; // pay-monthly: funding covers deposit + one period, topped up by payRent
         State state;
     }
 
@@ -63,6 +77,7 @@ interface IRentEscrowV2 {
         uint32 leasesCompleted; // closed normally (no dispute, no early termination)
         uint32 leasesDisputed; // disputes opened on this tenant's leases (by either party)
         uint32 leasesTerminatedEarly; // ended by an accepted mutual termination
+        uint32 leasesDefaulted; // monthly leases ended by claimDefault (the tenant stopped paying)
         uint32 periodsPaid; // rent periods released to landlords
         uint128 rentPaid; // token units released to landlords
         uint128 depositsPosted; // token units of deposit posted on leases that have ended
@@ -78,10 +93,33 @@ interface IRentEscrowV2 {
         uint32 periodSeconds,
         uint16 periods
     );
+    /// @dev Same terms as LeaseCreated, but for a monthly lease (createLeaseMonthly): funding will
+    ///      cover deposit + one period's rent, topped up later by payRent / withdrawAndPayRent.
+    event LeaseCreatedMonthly(
+        uint256 indexed leaseId,
+        address indexed landlord,
+        address indexed tenant,
+        uint128 deposit,
+        uint128 rentPerPeriod,
+        uint32 periodSeconds,
+        uint16 periods
+    );
     event LeaseFunded(uint256 indexed leaseId, address indexed tenant, uint256 amount, uint64 startTime);
-    /// @dev Emitted by the borrow/withdraw funding paths in addition to LeaseFunded.
+    /// @dev Emitted by the borrow/withdraw funding paths (borrowAndFund, withdrawAndFund,
+    ///      withdrawAndPayRent) in addition to LeaseFunded / RentPaid.
     event LeaseBorrowFunded(
         uint256 indexed leaseId, address indexed tenant, uint256 debt, uint256 received, uint256 refund
+    );
+    /// @dev A monthly lease's rent was paid in: payRent or withdrawAndPayRent.
+    event RentPaid(uint256 indexed leaseId, address indexed payer, uint16 count, uint256 amount);
+    /// @dev A monthly lease was closed by claimDefault: the landlord took the funded unclaimed rent
+    ///      plus `depositForfeit` out of the deposit; the tenant the rest of the deposit.
+    event LeaseDefaulted(
+        uint256 indexed leaseId,
+        address indexed landlord,
+        uint256 rentToLandlord,
+        uint256 depositForfeit,
+        uint256 toTenant
     );
     event RentClaimed(uint256 indexed leaseId, address indexed landlord, uint16 periods, uint256 amount);
     event LeaseClosed(uint256 indexed leaseId, address indexed tenant, uint256 toTenant, uint256 toLandlord);
@@ -136,6 +174,20 @@ interface IRentEscrowV2 {
     /// @notice returnUnbooked asked for more MUSD than the unbooked pot holds. The arbiter can
     ///         never touch any lease's escrow, only the balance beyond totalEscrowed.
     error InsufficientUnbooked(uint256 requested, uint256 available);
+    /// @notice The action only exists for monthly leases (payRent, withdrawAndPayRent,
+    ///         claimDefault): a prepaid lease is fully funded the moment it starts.
+    error NotMonthly(uint256 leaseId);
+    /// @notice payRent / withdrawAndPayRent with nothing left to fund: every period of the lease is
+    ///         already paid in (count was zero, or capped to zero against the unfunded remainder).
+    error RentFullyFunded(uint256 leaseId);
+    /// @notice closeLease on a monthly lease that is not fully funded: the landlord should let the
+    ///         term run and use claimDefault instead once the tenant misses a period past the grace.
+    error RentNotFullyFunded(uint256 leaseId, uint16 funded, uint16 required);
+    /// @notice claimDefault before the default is due: an unfunded period must be overdue by more
+    ///         than the grace (one full periodSeconds), i.e. before `dueAt`. Also fires for a fully
+    ///         funded monthly lease (dueAt is then endTime + periodSeconds, past which closeLease,
+    ///         not claimDefault, is the way out).
+    error NotDefaulted(uint256 leaseId, uint256 dueAt);
     /// @notice A non-zero BTC transfer to the escrow. The escrow never holds BTC on purpose (its
     ///         asset is MUSD), so there would be no way to spend it: it bounces back to the sender.
     ///         Mezo's trove code does send the escrow one BTC transfer — always with value zero.
@@ -150,7 +202,8 @@ interface IRentEscrowV2 {
     ///         allowlisted there (compliance-aware listing).
     function leaseShare() external view returns (address);
     /// @notice IHumanGate consulted by every funding path (fundLease, borrowAndFund,
-    ///         withdrawAndFund), or address(0) if funding is not gated at all.
+    ///         withdrawAndFund, payRent, withdrawAndPayRent), or address(0) if funding is not
+    ///         gated at all.
     function humanGate() external view returns (address);
     /// @notice Mezo's BorrowerOperationsSignatures, relayed by borrowAndFund / withdrawAndFund, or
     ///         address(0) to disable both (they then revert MezoDisabled).
@@ -188,6 +241,19 @@ interface IRentEscrowV2 {
     function createLease(address tenant, uint128 deposit, uint128 rentPerPeriod, uint32 periodSeconds, uint16 periods)
         external
         returns (uint256 leaseId);
+
+    /// @notice Same terms as createLease, but pay-monthly: funding (any of fundLease, borrowAndFund,
+    ///         withdrawAndFund) covers deposit + ONE period's rent and sets periodsFunded = 1; the
+    ///         tenant then pays each further period with payRent / withdrawAndPayRent. The term,
+    ///         endTime and the release of rent to the landlord (claimable, capped at periodsFunded)
+    ///         are exactly the prepaid lease's.
+    function createLeaseMonthly(
+        address tenant,
+        uint128 deposit,
+        uint128 rentPerPeriod,
+        uint32 periodSeconds,
+        uint16 periods
+    ) external returns (uint256 leaseId);
 
     /// @notice Landlord withdraws an unfunded lease. CREATED -> CANCELLED.
     function cancelLease(uint256 leaseId) external;
@@ -239,13 +305,52 @@ interface IRentEscrowV2 {
         uint256 deadline
     ) external;
 
-    /// @notice Releases every elapsed, unclaimed rent period to the landlord. Callable by anyone
-    ///         (funds can only go to the landlord). ACTIVE only; frozen while DISPUTED.
+    /// @notice Releases every elapsed, unclaimed rent period to the landlord, capped at the funded
+    ///         periods (a monthly lease only releases rent that was actually paid in). Callable by
+    ///         anyone (funds can only go to the landlord). ACTIVE only; frozen while DISPUTED.
     function claimRent(uint256 leaseId) external;
+
+    /// @notice The tenant pays `count` further rent periods of an ACTIVE monthly lease up front,
+    ///         pulling count * rentPerPeriod (needs token approval); periodsFunded grows by count
+    ///         and never past `periods` (a larger count is capped to the unfunded remainder, a zero
+    ///         one — or a capped-to-zero one — reverts RentFullyFunded). Monthly leases only: a
+    ///         prepaid lease reverts NotMonthly (it is fully funded from the start).
+    function payRent(uint256 leaseId, uint16 count) external;
+
+    /// @notice payRent through the tenant's Mezo trove: the escrow relays a WithdrawMUSD signature
+    ///         (borrower = msg.sender, recipient = the escrow) that mints `amount` of new MUSD
+    ///         against the tenant's trove and sends it here. The count is capped like payRent's;
+    ///         the measured MUSD delta must cover count * rentPerPeriod (InsufficientBorrowed
+    ///         otherwise) and any surplus is refunded to the tenant in the same transaction.
+    ///         Mezo's zero-value BTC touch to the caller works through receive() (see StrayBtc).
+    ///         Reverts MezoDisabled if borrowerOpsSignatures is address(0), NotMonthly for prepaid
+    ///         leases. Subject to the same front-running as withdrawAndFund, with the same fallback
+    ///         (payRent) and the same recovery (returnUnbooked).
+    function withdrawAndPayRent(
+        uint256 leaseId,
+        uint16 count,
+        uint256 amount,
+        address upperHint,
+        address lowerHint,
+        bytes calldata signature,
+        uint256 deadline
+    ) external;
+
+    /// @notice The landlord closes a monthly lease whose tenant stopped paying. A period i (0-based)
+    ///         is due at startTime + i * periodSeconds; the lease is in default once
+    ///         block.timestamp >= startTime + periodsFunded * periodSeconds + periodSeconds (the
+    ///         grace is one full period of that lease) while periodsFunded < periods. Split: the
+    ///         landlord takes the funded-but-unclaimed rent plus at most ONE period's rent out of
+    ///         the deposit (capped at the deposit), the tenant the rest of the deposit; the lease
+    ///         goes CLOSED and the tenant's stats count leasesDefaulted. ACTIVE, monthly, landlord
+    ///         only; reverts NotDefaulted before the boundary (a fully funded lease never defaults).
+    function claimDefault(uint256 leaseId) external;
 
     /// @notice After the term: remaining rent to the landlord, deposit to the tenant. ACTIVE -> CLOSED.
     ///         The landlord may close as soon as the term ends; anyone may close one period later
     ///         (the grace period gives the landlord time to open a dispute over the deposit).
+    ///         A monthly lease must be fully funded (periodsFunded == periods, RentNotFullyFunded
+    ///         otherwise): an underfunded lease past its due date is the landlord's claimDefault.
     function closeLease(uint256 leaseId) external;
 
     /// @notice Tenant or landlord freezes the lease for the arbiter. ACTIVE -> DISPUTED.
