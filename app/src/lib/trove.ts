@@ -4,6 +4,8 @@
  * scaled by 1e18, and ratios scaled by 1e18 (1.5e18 = 150%).
  */
 
+import type { MezoProtocol, Trove } from '../hooks'
+
 export const ONE = 10n ** 18n
 
 /** Debt a new trove records: what you borrow + the one-time borrowing fee + the refundable gas reserve. */
@@ -100,6 +102,43 @@ export function borrowHeadroom(coll: bigint, debt: bigint, price: bigint, target
 export function collToReach(coll: bigint, debt: bigint, price: bigint, targetRatio: bigint): bigint {
   const need = collateralFor(debt, targetRatio, price)
   return need > coll ? need - coll : 0n
+}
+
+/** The collateral ratio a trove keeps when it mints more MUSD for a rent payment (FundPanel and the pay-monthly card agree on it). */
+export const WITHDRAW_TARGET = 160
+
+export type WithdrawQuote = {
+  /** Most MUSD the trove can mint before the fee (0 in Recovery Mode). */
+  maxMint: bigint
+  /** The one-time borrowing fee on `amount`. */
+  fee: bigint
+  /** The trove's debt once `amount` and its fee are added. */
+  newDebt: bigint
+  /** The collateral ratio at that debt. */
+  newRatio: bigint
+  fits: boolean
+  /** Recovery Mode or not enough headroom: no mint. */
+  blocked: boolean
+}
+
+/**
+ * What minting `amount` more MUSD against an existing trove does, and whether Mezo lets it: the trove
+ * keeps `WITHDRAW_TARGET`% and stays inside its recorded borrowing cap; in Recovery Mode nothing mints.
+ */
+export function withdrawQuote(
+  trove: Pick<Trove, 'coll' | 'debt' | 'price' | 'recoveryMode' | 'maxBorrowingCapacity'>,
+  protocol: Pick<MezoProtocol, 'price' | 'borrowingRate'>,
+  amount: bigint,
+): WithdrawQuote {
+  const room = trove.recoveryMode
+    ? 0n
+    : borrowHeadroom(trove.coll, trove.debt, protocol.price, percentRatio(WITHDRAW_TARGET), trove.maxBorrowingCapacity)
+  const maxMint = (room * ONE) / (ONE + protocol.borrowingRate)
+  const fee = (amount * protocol.borrowingRate) / ONE
+  const newDebt = trove.debt + amount + fee
+  const newRatio = collateralRatio(trove.coll, newDebt, protocol.price)
+  const fits = amount <= maxMint
+  return { maxMint, fee, newDebt, newRatio, fits, blocked: trove.recoveryMode || !fits }
 }
 
 /** Most BTC a trove can withdraw and still sit at `minRatio`. Never negative. */

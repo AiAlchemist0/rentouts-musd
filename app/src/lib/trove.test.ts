@@ -15,6 +15,8 @@ import {
   ratioPercent,
   riskLevel,
   withdrawableColl,
+  withdrawQuote,
+  WITHDRAW_TARGET,
 } from './trove'
 
 const price = 80_000n * ONE // $80,000 per BTC
@@ -147,5 +149,41 @@ describe('managing an open trove', () => {
     expect(riskLevel(percentRatio(155), percentRatio(150), false)).toBe('watch')
     expect(riskLevel(percentRatio(155), percentRatio(160), true)).toBe('danger')
     expect(riskLevel(percentRatio(165), percentRatio(160), true)).toBe('watch')
+  })
+
+  it('quotes a trove mint at the shared withdraw target', () => {
+    const rate = ONE / 1000n // 0.1%
+    const protocol = { price, borrowingRate: rate }
+    // Same trove as above: at 160% it can carry 5,000 of debt; owing 2,500 leaves 2,500 before the fee.
+    const trove = { coll, debt, price, recoveryMode: false, maxBorrowingCapacity: capacity }
+    const q = withdrawQuote(trove, protocol, musd(10))
+    expect(q.maxMint).toBe((musd(2500) * ONE) / (ONE + rate))
+    expect(q.fee).toBe(musd(10) / 1000n)
+    // 2,500 owed + 10 minted + 0.01 fee.
+    expect(q.newDebt).toBe(musd(2510) + musd(10) / 1000n)
+    expect(q.fits).toBe(true)
+    expect(q.blocked).toBe(false)
+    expect(q.newRatio).toBe(collateralRatio(coll, q.newDebt, price))
+    // Over the headroom: fits is false, blocked follows.
+    const tooBig = withdrawQuote(trove, protocol, musd(3000))
+    expect(tooBig.fits).toBe(false)
+    expect(tooBig.blocked).toBe(true)
+    // The recorded capacity cap binds before the ratio when it is tighter.
+    expect(withdrawQuote({ ...trove, maxBorrowingCapacity: musd(2520) }, protocol, musd(10)).fits).toBe(true)
+    expect(withdrawQuote({ ...trove, maxBorrowingCapacity: musd(2509) }, protocol, musd(10)).fits).toBe(false)
+  })
+
+  it('blocks the mint entirely in Recovery Mode', () => {
+    const q = withdrawQuote(
+      { coll, debt, price, recoveryMode: true, maxBorrowingCapacity: musd(7272) },
+      { price, borrowingRate: ONE / 1000n },
+      musd(10),
+    )
+    expect(q.maxMint).toBe(0n)
+    expect(q.blocked).toBe(true)
+  })
+
+  it('exposes the one withdraw target every trove payment keeps', () => {
+    expect(WITHDRAW_TARGET).toBe(160)
   })
 })

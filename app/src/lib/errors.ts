@@ -14,7 +14,7 @@ import { rentEscrowAbi } from '../abi/rentEscrow'
 import { rentEscrowV2Abi } from '../abi/rentEscrowV2'
 import { rentoutsSubnamesAbi } from '../abi/rentoutsSubnames'
 import { RulingStatus } from './aiJudge'
-import { shortAddress, formatToken } from './format'
+import { shortAddress, formatToken, formatCountdown } from './format'
 import { STATE_LABELS } from './lease'
 
 /**
@@ -128,6 +128,22 @@ export function describeError(name: string, args: readonly unknown[] = []): stri
     }
     case 'InsufficientUnbooked':
       return 'More MUSD was requested than the unbooked pot holds. Nothing of any lease’s escrow can be moved.'
+    // Pay-monthly (Wave-2)
+    case 'NotMonthly':
+      return `${leaseRef(args)} is prepaid: it was fully funded the moment it started, so there’s nothing to pay in period by period.`
+    case 'RentFullyFunded':
+      return `Every period of ${leaseRef(args).toLowerCase()} is already paid in; there’s nothing left to fund.`
+    case 'RentNotFullyFunded': {
+      const funded = Number(args[1])
+      const required = Number(args[2])
+      return `${leaseRef(args)} can’t close yet: ${funded} of ${required} periods paid in so far. If the tenant stops paying, claim default instead.`
+    }
+    case 'NotDefaulted': {
+      const now = Math.floor(Date.now() / 1000)
+      const dueAt = Number(args[1])
+      const wait = Number.isFinite(dueAt) && dueAt > now ? ` The tenant has ${formatCountdown(dueAt - now)} left to pay.` : ''
+      return `${leaseRef(args)} isn’t in default yet: a period only counts as missed once it has run one full period past its due date.${wait}`
+    }
     // AIArbiter
     case 'NotHuman':
       return 'Only the human arbiter can do this.'

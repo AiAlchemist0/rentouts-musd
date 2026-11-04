@@ -97,6 +97,22 @@ describe('describeError', () => {
     expect(describeError('DisputeNotTimedOut', [3n])).toMatch(/timeout hasn’t passed/)
     expect(describeError('InsufficientUnbooked', [100n, 50n])).toMatch(/unbooked pot/)
   })
+
+  it('maps the pay-monthly errors', () => {
+    expect(describeError('NotMonthly', [3n])).toBe(
+      'Lease #3 is prepaid: it was fully funded the moment it started, so there’s nothing to pay in period by period.',
+    )
+    expect(describeError('RentFullyFunded', [3n])).toBe(
+      'Every period of lease #3 is already paid in; there’s nothing left to fund.',
+    )
+    expect(describeError('RentNotFullyFunded', [3n, 1, 3])).toBe(
+      'Lease #3 can’t close yet: 1 of 3 periods paid in so far. If the tenant stops paying, claim default instead.',
+    )
+    expect(describeError('NotDefaulted', [3n])).toMatch(/isn’t in default yet/)
+    // With a future dueAt the message says how long is left (measured from now).
+    const soon = BigInt(Math.floor(Date.now() / 1000) + 90)
+    expect(describeError('NotDefaulted', [3n, soon])).toMatch(/left to pay\.$/)
+  })
 })
 
 describe('errorMessage', () => {
@@ -124,6 +140,17 @@ describe('errorMessage', () => {
     expect(errorMessage(revert(rentEscrowAbi, 'fundLease', data))).toMatch(/^0x4848…e936 hasn’t passed the escrow’s human verification/)
     // Also when the revert surfaces through a call whose ABI doesn't list it (decoded against knownErrorsAbi).
     expect(errorMessage(revert(rentoutsSubnamesAbi, 'register', data))).toMatch(/World ID 4\.0/)
+  })
+
+  it('decodes pay-monthly reverts from payRent and closeLease', () => {
+    const notMonthly = encodeErrorResult({ abi: rentEscrowV2Abi, errorName: 'NotMonthly', args: [3n] })
+    expect(errorMessage(revert(rentEscrowV2Abi, 'payRent', notMonthly))).toMatch(/is prepaid/)
+    const underfunded = encodeErrorResult({ abi: rentEscrowV2Abi, errorName: 'RentNotFullyFunded', args: [3n, 1, 3] })
+    expect(errorMessage(revert(rentEscrowV2Abi, 'closeLease', underfunded))).toMatch(/1 of 3 periods/)
+    const fullyFunded = encodeErrorResult({ abi: rentEscrowV2Abi, errorName: 'RentFullyFunded', args: [3n] })
+    expect(errorMessage(revert(rentEscrowV2Abi, 'payRent', fullyFunded))).toMatch(/nothing left to fund/)
+    const notDefaulted = encodeErrorResult({ abi: rentEscrowV2Abi, errorName: 'NotDefaulted', args: [3n, 1n] })
+    expect(errorMessage(revert(rentEscrowV2Abi, 'claimDefault', notDefaulted))).toMatch(/isn’t in default yet/)
   })
 
   it('decodes AIArbiter reverts, including the escrow’s bubbling through it', () => {

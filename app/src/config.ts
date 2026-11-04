@@ -110,9 +110,9 @@ export const ENV_CONTRACTS = {
 } as const
 
 /**
- * DemoLandlord recorded for this escrow (Mezo only; it creates leases on the escrow it was deployed for).
- * The V2 entry records none — the deployed demo landlord is bound to the V1 escrow, whose leases this
- * app can no longer fund — so the one-wallet demo card is off on the Wave-2 build.
+ * DemoLandlordV2 recorded for this escrow (Mezo only; it creates leases on the escrow it was deployed
+ * for). The Wave-2 deploy records its own demo landlord, so the one-wallet demo card works there:
+ * prepaid or pay-monthly. A VITE_ESCROW_ADDRESS pointing elsewhere turns the card off.
  */
 export const DEMO_LANDLORD = configured.escrow && DEPLOYMENTS.rentEscrow === configured.escrow ? DEPLOYMENTS.demoLandlord : undefined
 

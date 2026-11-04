@@ -3,7 +3,6 @@ import { formatUnits } from 'viem'
 import type { Address, Hash } from 'viem'
 import { useBalance, useReadContract, useSignTypedData } from 'wagmi'
 import { erc20Abi } from '../abi/erc20'
-import { borrowerOperationsSignaturesAbi } from '../abi/mezo'
 import { LeaseState } from '../abi/rentEscrow'
 import { rentEscrowV2Abi } from '../abi/rentEscrowV2'
 import { demoChain, explorerLabel, gasLabel, isMezo } from '../network'
@@ -29,26 +28,26 @@ import { errorMessage } from '../lib/errors'
 import { formatDuration, formatToken, txUrl } from '../lib/format'
 import { humanGateNotice } from '../lib/humanGate'
 import { MOCK_FUND_SCREEN, MOCK_VIEWER } from '../lib/mockLease'
-import { mezoSignaturesDomain, openTroveTypes, signatureDeadline, withdrawMusdTypes } from '../lib/mezoSignatures'
+import { mezoSignaturesDomain, openTroveTypes, signatureDeadline } from '../lib/mezoSignatures'
+import { readNonce, signWithdrawMusd } from '../lib/payFromTrove'
 import { walletReadQuery } from '../lib/polling'
-import { totalDue } from '../lib/lease'
+import { owedAtFunding } from '../lib/lease'
 import {
   ONE,
   bestRatioFor,
-  borrowHeadroom,
   btcFor,
   collateralFor,
-  collateralRatio,
   compositeDebt,
   liquidationPrice,
   percentRatio,
   TroveStatus,
+  WITHDRAW_TARGET,
+  withdrawQuote,
 } from '../lib/trove'
 import { GAS_KEEP, RATIO_CHOICES, RatioValue, formatBtc, formatUsd } from './BorrowPanel'
 
-/** The ratio a fresh borrow-and-pay trove suggests; minting against an open one keeps 160% like BorrowPanel. */
+/** The ratio a fresh borrow-and-pay trove suggests; minting against an open one keeps WITHDRAW_TARGET like BorrowPanel. */
 const SAFE_RATIO = 200
-const WITHDRAW_TARGET = 160
 
 // ?mockLease=1 (dev builds only): fixed sample data stands in for the wallet, the trove and the
 // leases, so the borrow-and-pay states can be reviewed with no wallet and no RPC. Module-level, like
@@ -57,7 +56,7 @@ const WITHDRAW_TARGET = 160
 const mockFundScreen = import.meta.env.DEV && new URLSearchParams(window.location.search).has('mockLease') ? MOCK_FUND_SCREEN : undefined
 
 /** "You sign a Mezo permission first (no gas), then send one transaction." */
-const PERMISSION_HINT =
+export const PERMISSION_HINT =
   'Two steps, one transaction: you sign a Mezo permission first — a message, no gas — then confirm the one transaction that pays the lease.'
 
 type PayProps = {
@@ -65,16 +64,6 @@ type PayProps = {
   account: Address
   owed: bigint
   onFunded: (leaseId: bigint, hash: Hash) => void
-}
-
-/** Reads the borrower's nonce fresh from Mezo's relay right before signing (any spent signature bumps it). */
-async function readNonce(client: ReturnType<typeof useDemoClient>, signatures: Address, account: Address): Promise<bigint> {
-  return client.readContract({
-    address: signatures,
-    abi: borrowerOperationsSignaturesAbi,
-    functionName: 'getNonce',
-    args: [account],
-  })
 }
 
 /** The fee rate as a percent string, e.g. "0.1". */
@@ -239,31 +228,25 @@ function WithdrawAndPay({ lease, account, owed, onFunded, protocol, trove }: Pay
   const [signError, setSignError] = useState<string | null>(null)
 
   const fmt = (v: bigint) => `${formatToken(v, tokenDecimals)} ${tokenSymbol}`
-  const room = trove.recoveryMode
-    ? 0n
-    : borrowHeadroom(trove.coll, trove.debt, protocol.price, percentRatio(WITHDRAW_TARGET), trove.maxBorrowingCapacity)
-  const maxMint = (room * ONE) / (ONE + protocol.borrowingRate)
-  const fee = (owed * protocol.borrowingRate) / ONE
-  const newDebt = trove.debt + owed + fee
-  const newRatio = collateralRatio(trove.coll, newDebt, protocol.price)
-  const fits = owed <= maxMint
-  const blocked = trove.recoveryMode || !fits
+  const { maxMint, fee, newDebt, newRatio, fits, blocked } = withdrawQuote(trove, protocol, owed)
 
   async function pay() {
     if (!escrow || !borrowerOpsSignatures || blocked) return
     setSignError(null)
     try {
-      const nonce = await readNonce(client, borrowerOpsSignatures, account)
-      const deadline = signatureDeadline(Math.floor(Date.now() / 1000))
       setSigning(true)
-      const signature = await signTypedDataAsync({
-        domain: mezoSignaturesDomain(borrowerOpsSignatures),
-        types: withdrawMusdTypes,
-        primaryType: 'WithdrawMUSD',
-        message: { amount: owed, borrower: account, recipient: escrow, nonce, deadline },
+      const { signature, deadline, upper, lower } = await signWithdrawMusd({
+        client,
+        account,
+        signatures: borrowerOpsSignatures,
+        recipient: escrow,
+        amount: owed,
+        coll: trove.coll,
+        newDebt,
+        signTypedDataAsync,
+        now: Math.floor(Date.now() / 1000),
       })
       setSigning(false)
-      const [upper, lower] = await troveHints(client, trove.coll, newDebt)
       const receipt = await tx.run(
         {
           address: escrow,
@@ -383,7 +366,9 @@ function FundRow({
   const nameOf = useRentoutsNames([lease.landlord])
   const approveTx = useTx()
   const fundTx = useTx()
-  const due = totalDue(lease.deposit, lease.rentPerPeriod, lease.periods)
+  const due = owedAtFunding(lease)
+  const monthly = lease.monthly === true
+  const laterPeriods = lease.periods - 1
 
   const { data: allowance } = useReadContract({
     address: token,
@@ -405,9 +390,21 @@ function FundRow({
           Lease #{String(lease.id)} from <AddressLink address={lease.landlord} name={nameOf(lease.landlord)} />
         </p>
         <p className="hint">
-          {formatToken(lease.deposit, tokenDecimals)} deposit + {lease.periods} × {formatToken(lease.rentPerPeriod, tokenDecimals)} rent,
-          one period every {formatDuration(lease.periodSeconds)}. You prepay {amount}
-          {isMezo && protocol ? <> (≈ {formatBtc(btcFor(due, protocol.price))} BTC at today’s price)</> : null}.
+          {monthly ? (
+            <>
+              {formatToken(lease.deposit, tokenDecimals)} deposit + the first period’s rent ({formatToken(lease.rentPerPeriod, tokenDecimals)}), one period
+              every {formatDuration(lease.periodSeconds)}. You prepay {amount}
+              {isMezo && protocol ? <> (≈ {formatBtc(btcFor(due, protocol.price))} BTC at today’s price)</> : null} now; the other{' '}
+              {laterPeriods === 1 ? 'period' : `${laterPeriods} periods`} of {formatToken(lease.rentPerPeriod, tokenDecimals)} each are paid one at a time
+              under <a href="#run">Run the lease</a>.
+            </>
+          ) : (
+            <>
+              {formatToken(lease.deposit, tokenDecimals)} deposit + {lease.periods} × {formatToken(lease.rentPerPeriod, tokenDecimals)} rent,
+              one period every {formatDuration(lease.periodSeconds)}. You prepay {amount}
+              {isMezo && protocol ? <> (≈ {formatBtc(btcFor(due, protocol.price))} BTC at today’s price)</> : null}.
+            </>
+          )}
         </p>
       </div>
 
@@ -484,9 +481,10 @@ export function FundPanel() {
         <p className="lede">
           {isMezo ? (
             <>
-              Pay the deposit and every period’s rent in one go — straight from a Mezo trove you open in the same
-              transaction, or with MUSD you already hold. Either way, only the contract moves the money from here: to
-              the landlord as rent, back to you as deposit.
+              Pay the deposit and the rent in MUSD — straight from a Mezo trove you open in the same transaction, or
+              with MUSD you already hold. A prepaid lease covers every period up front; a monthly one starts with the
+              deposit and the first period, and the rest is paid period by period. Either way, only the contract moves
+              the money from here: to the landlord as rent, back to you as deposit.
             </>
           ) : (
             <>

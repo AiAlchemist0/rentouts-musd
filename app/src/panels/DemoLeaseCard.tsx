@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { parseEventLogs, type Address } from 'viem'
-import { demoLandlordAbi } from '../abi/demoLandlord'
+import { demoLandlordV2Abi } from '../abi/demoLandlord'
 import { AddressLink, TxStatus } from '../components/ui'
 import { DEMO_LANDLORD } from '../config'
 import { useContracts, useDemoClient, useTx, useWallet } from '../hooks'
@@ -13,24 +13,26 @@ function useDemoTerms(demo: Address) {
     queryKey: ['demo-terms', demo],
     staleTime: Infinity,
     queryFn: async () => {
-      const at = { address: demo, abi: demoLandlordAbi } as const
-      const [deposit, rent, period, periods] = await client.multicall({
+      const at = { address: demo, abi: demoLandlordV2Abi } as const
+      const [deposit, rent, period, periods, total, firstMonthly] = await client.multicall({
         allowFailure: false,
         contracts: [
           { ...at, functionName: 'deposit' },
           { ...at, functionName: 'rentPerPeriod' },
           { ...at, functionName: 'periodSeconds' },
           { ...at, functionName: 'periods' },
+          { ...at, functionName: 'totalDue' },
+          { ...at, functionName: 'firstMonthlyDue' },
         ],
       })
-      return { deposit, rent, period, periods }
+      return { deposit, rent, period, periods, total, firstMonthly }
     },
   })
 }
 
 /**
- * One-wallet path: the DemoLandlord contract is an allowlisted landlord that creates a small lease with the
- * caller as tenant, so a reviewer can run the whole tenant side without a second wallet.
+ * One-wallet path: the DemoLandlordV2 contract is an allowlisted landlord that creates a small lease with the
+ * caller as tenant — prepaid or pay-monthly — so a reviewer can run the whole tenant side without a second wallet.
  */
 export function DemoLeaseCard() {
   if (!DEMO_LANDLORD) return null
@@ -46,17 +48,25 @@ function DemoLease({ demo }: { demo: Address }) {
   const [leaseId, setLeaseId] = useState<bigint | null>(null)
   const t = terms.data
 
-  async function request() {
+  async function request(monthly: boolean) {
     setLeaseId(null)
-    const receipt = await tx.run({ address: demo, abi: demoLandlordAbi, functionName: 'requestLease', args: [] }, 'Request a demo lease')
+    const receipt = await tx.run(
+      { address: demo, abi: demoLandlordV2Abi, functionName: 'requestLease', args: [monthly] },
+      monthly ? 'Request a monthly demo lease' : 'Request a prepaid demo lease',
+    )
     if (receipt) {
-      const [created] = parseEventLogs({ abi: demoLandlordAbi, eventName: 'DemoLeaseCreated', logs: receipt.logs })
-      // No event: the tenant already had an unfunded demo lease, which requestLease returned instead.
+      const [created] = parseEventLogs({ abi: demoLandlordV2Abi, eventName: 'DemoLeaseCreated', logs: receipt.logs })
+      // No event: the tenant already had an unfunded demo lease of this mode, which requestLease returned instead.
       let id = created?.args.leaseId
       // Mezo's RPC backends can lag a block behind, so ask a few times.
       for (let i = 0; id === undefined && address && i < 4; i++) {
         const last = await client
-          .readContract({ address: demo, abi: demoLandlordAbi, functionName: 'lastLeaseOf', args: [address] })
+          .readContract({
+            address: demo,
+            abi: demoLandlordV2Abi,
+            functionName: monthly ? 'lastMonthlyLeaseOf' : 'lastLeaseOf',
+            args: [address],
+          })
           .catch(() => 0n)
         if (last > 0n) id = last
         else await new Promise((resolve) => setTimeout(resolve, 1000))
@@ -76,7 +86,9 @@ function DemoLease({ demo }: { demo: Address }) {
             <>
               A {fmt(t.deposit)} deposit and {t.periods} × {fmt(t.rent)} rent, one period every {formatDuration(t.period)}. You’re
               the tenant; the landlord is a contract (<AddressLink address={demo} />
-              ), so rent releases on its own schedule and the deposit comes back to you at the end.
+              ), so rent releases on its own schedule and the deposit comes back to you at the end. Prepaid costs{' '}
+              {fmt(t.total)} up front; monthly starts at {fmt(t.firstMonthly)} ({fmt(t.deposit)} deposit + the first
+              period) and the rest is paid period by period.
             </>
           ) : (
             'Reading the demo terms…'
@@ -84,8 +96,11 @@ function DemoLease({ demo }: { demo: Address }) {
         </p>
       </div>
       <div className="demo-actions">
-        <button type="button" className="btn btn-primary" disabled={!ready || tx.busy} onClick={request}>
-          Get a demo lease
+        <button type="button" className="btn btn-primary" disabled={!ready || tx.busy} onClick={() => request(false)}>
+          Get a prepaid lease
+        </button>
+        <button type="button" className="btn" disabled={!ready || tx.busy} onClick={() => request(true)}>
+          Get a monthly lease
         </button>
         {!ready ? <span className="hint">Connect a wallet on Mezo testnet.</span> : null}
       </div>

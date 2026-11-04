@@ -1,21 +1,27 @@
 import { parseAbi, type Address } from 'viem'
 
 /**
- * RentEscrowV2, transcribed from src/interfaces/IRentEscrowV2.sol. It restates the V1 surface verbatim
- * (same Lease struct, same state enum: NONE, CREATED, ACTIVE, DISPUTED, CLOSED, CANCELLED) with the
- * Wave-2 additions: TenantStats gains leasesTerminatedEarly, borrowAndFund / withdrawAndFund relay a
- * tenant-signed Mezo trove operation, proposeTermination / acceptTermination settle a lease by
- * agreement, and resolveByTimeout ends an abandoned dispute after the immutable disputeTimeout.
+ * RentEscrowV2, transcribed from src/interfaces/IRentEscrowV2.sol (checked against
+ * out/RentEscrowV2.sol/RentEscrowV2.json from `forge build`). It restates the V1 surface verbatim
+ * (same State enum: NONE, CREATED, ACTIVE, DISPUTED, CLOSED, CANCELLED) with the Wave-2 additions:
+ * the Lease struct gains periodsFunded and monthly (pay-monthly leases), TenantStats gains
+ * leasesTerminatedEarly and leasesDefaulted, borrowAndFund / withdrawAndFund relay a tenant-signed
+ * Mezo trove operation, proposeTermination / acceptTermination settle a lease by agreement,
+ * resolveByTimeout ends an abandoned dispute after the immutable disputeTimeout, and payRent /
+ * withdrawAndPayRent / claimDefault run the pay-monthly top-up and default rule.
  * The Mezo build talks to this ABI; the Sepolia build stays on rentEscrowAbi (see activeEscrowAbi).
  */
 export const rentEscrowV2Abi = parseAbi([
-  'struct Lease { address landlord; address tenant; uint128 deposit; uint128 rentPerPeriod; uint32 periodSeconds; uint16 periods; uint16 periodsClaimed; uint64 startTime; uint8 state; }',
-  'struct TenantStats { uint32 leasesFunded; uint32 leasesCompleted; uint32 leasesDisputed; uint32 leasesTerminatedEarly; uint32 periodsPaid; uint128 rentPaid; uint128 depositsPosted; uint128 depositsReturned; }',
+  'struct Lease { address landlord; address tenant; uint128 deposit; uint128 rentPerPeriod; uint32 periodSeconds; uint16 periods; uint16 periodsClaimed; uint16 periodsFunded; uint64 startTime; bool monthly; uint8 state; }',
+  'struct TenantStats { uint32 leasesFunded; uint32 leasesCompleted; uint32 leasesDisputed; uint32 leasesTerminatedEarly; uint32 leasesDefaulted; uint32 periodsPaid; uint128 rentPaid; uint128 depositsPosted; uint128 depositsReturned; }',
   'struct Termination { address proposer; uint128 penaltyToLandlord; uint64 expiry; }',
 
   'event LeaseCreated(uint256 indexed leaseId, address indexed landlord, address indexed tenant, uint128 deposit, uint128 rentPerPeriod, uint32 periodSeconds, uint16 periods)',
+  'event LeaseCreatedMonthly(uint256 indexed leaseId, address indexed landlord, address indexed tenant, uint128 deposit, uint128 rentPerPeriod, uint32 periodSeconds, uint16 periods)',
   'event LeaseFunded(uint256 indexed leaseId, address indexed tenant, uint256 amount, uint64 startTime)',
   'event LeaseBorrowFunded(uint256 indexed leaseId, address indexed tenant, uint256 debt, uint256 received, uint256 refund)',
+  'event RentPaid(uint256 indexed leaseId, address indexed payer, uint16 count, uint256 amount)',
+  'event LeaseDefaulted(uint256 indexed leaseId, address indexed landlord, uint256 rentToLandlord, uint256 depositForfeit, uint256 toTenant)',
   'event RentClaimed(uint256 indexed leaseId, address indexed landlord, uint16 periods, uint256 amount)',
   'event LeaseClosed(uint256 indexed leaseId, address indexed tenant, uint256 toTenant, uint256 toLandlord)',
   'event LeaseCancelled(uint256 indexed leaseId)',
@@ -47,9 +53,18 @@ export const rentEscrowV2Abi = parseAbi([
   'error WrongTermsHash(uint256 leaseId)',
   'error ProposerCannotAccept(uint256 leaseId)',
   'error InvalidExpiry(uint256 leaseId, uint64 expiry)',
-  'error PenaltyTooHigh(uint256 leaseId, uint128 penalty, uint256 tenantSide)',
+  'error PenaltyTooHigh(uint256 leaseId, uint256 penalty, uint256 tenantSide)',
   'error InsufficientUnbooked(uint256 requested, uint256 available)',
+  'error NotMonthly(uint256 leaseId)',
+  'error RentFullyFunded(uint256 leaseId)',
+  'error RentNotFullyFunded(uint256 leaseId, uint16 funded, uint16 required)',
+  'error NotDefaulted(uint256 leaseId, uint256 dueAt)',
   'error StrayBtc(uint256 amount)',
+  // Thrown by the contract itself (OpenZeppelin guard, token transfers, constructor and deploy checks).
+  'error HumanGateHasNoCode(address humanGate)',
+  'error ReentrancyGuardReentrantCall()',
+  'error SafeERC20FailedOperation(address token)',
+  'error ZeroAddress()',
 
   'function token() view returns (address)',
   'function arbiter() view returns (address)',
@@ -72,11 +87,15 @@ export const rentEscrowV2Abi = parseAbi([
   'function disputeOpenedAt(uint256 leaseId) view returns (uint64)',
 
   'function createLease(address tenant, uint128 deposit, uint128 rentPerPeriod, uint32 periodSeconds, uint16 periods) returns (uint256 leaseId)',
+  'function createLeaseMonthly(address tenant, uint128 deposit, uint128 rentPerPeriod, uint32 periodSeconds, uint16 periods) returns (uint256 leaseId)',
   'function cancelLease(uint256 leaseId)',
   'function fundLease(uint256 leaseId)',
   'function borrowAndFund(uint256 leaseId, uint256 debtAmount, address upperHint, address lowerHint, bytes signature, uint256 deadline) payable',
   'function withdrawAndFund(uint256 leaseId, uint256 amount, address upperHint, address lowerHint, bytes signature, uint256 deadline)',
+  'function payRent(uint256 leaseId, uint16 count)',
+  'function withdrawAndPayRent(uint256 leaseId, uint16 count, uint256 amount, address upperHint, address lowerHint, bytes signature, uint256 deadline)',
   'function claimRent(uint256 leaseId)',
+  'function claimDefault(uint256 leaseId)',
   'function closeLease(uint256 leaseId)',
   'function openDispute(uint256 leaseId)',
   'function resolveDispute(uint256 leaseId, uint16 tenantBps)',

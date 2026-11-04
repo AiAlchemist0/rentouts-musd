@@ -56,6 +56,8 @@ export function CreateLeasePanel() {
   const [rent, setRent] = useState<string>(LEASE_DEFAULTS.rentPerPeriod)
   const [period, setPeriod] = useState<string>(LEASE_DEFAULTS.periodSeconds)
   const [periods, setPeriods] = useState<string>(LEASE_DEFAULTS.periods)
+  /** Pay-monthly (createLeaseMonthly) instead of prepaying everything; only on the Wave-2 escrow. */
+  const [monthly, setMonthly] = useState(false)
   const [createdId, setCreatedId] = useState<bigint | null>(null)
   const tx = useTx()
 
@@ -87,14 +89,32 @@ export function CreateLeasePanel() {
     event.preventDefault()
     if (!canSubmit || !escrow || !tenant || depositUnits === null || rentUnits === null) return
     setCreatedId(null)
-    const receipt = await tx.run({
-      address: escrow,
-      abi: activeEscrowAbi,
-      functionName: 'createLease',
-      args: [tenant, depositUnits, rentUnits, periodSeconds!, periodCount!],
-    }, `Create lease for ${resolved.kind === 'name' ? resolved.name : tenant}`)
+    const who = resolved.kind === 'name' ? resolved.name : tenant
+    const receipt = monthly
+      ? await tx.run(
+          {
+            address: escrow,
+            abi: activeEscrowAbi,
+            functionName: 'createLeaseMonthly',
+            args: [tenant, depositUnits, rentUnits, periodSeconds!, periodCount!],
+          },
+          `Create a pay-monthly lease for ${who}`,
+        )
+      : await tx.run(
+          {
+            address: escrow,
+            abi: activeEscrowAbi,
+            functionName: 'createLease',
+            args: [tenant, depositUnits, rentUnits, periodSeconds!, periodCount!],
+          },
+          `Create lease for ${who}`,
+        )
     if (receipt) {
-      const [created] = parseEventLogs({ abi: activeEscrowAbi, eventName: 'LeaseCreated', logs: receipt.logs })
+      const [created] = parseEventLogs({
+        abi: activeEscrowAbi,
+        eventName: monthly ? 'LeaseCreatedMonthly' : 'LeaseCreated',
+        logs: receipt.logs,
+      })
       setCreatedId(created?.args.leaseId ?? null)
     }
   }
@@ -105,12 +125,12 @@ export function CreateLeasePanel() {
         <h2>{isMezo ? 'Get a lease' : 'Create a lease'}</h2>
         <p className="lede">
           {isMezo
-            ? 'A landlord proposes terms to a tenant’s wallet. The tenant then prepays the deposit and every period’s rent in MUSD into the escrow, which pays the landlord one period at a time.'
+            ? 'A landlord proposes terms to a tenant’s wallet. The tenant then funds the escrow in MUSD — everything up front, or the deposit plus the first period on a pay-monthly lease — and it pays the landlord one period at a time.'
             : 'The landlord proposes terms to a tenant, named by their ENS name. The tenant then prepays the deposit and every period’s rent into the escrow.'}
         </p>
       </div>
 
-      {/* The demo landlord is bound to the first Mezo escrow, so on Wave-2 only the plain form shows. */}
+      {/* The Wave-2 deploy records its own demo landlord, so the one-wallet card shows above the plain form. */}
       {isMezo ? <DemoLeaseCard /> : null}
       {isMezo && DEMO_LANDLORD ? <h3 className="section-title">Or list your own lease as a landlord</h3> : null}
 
@@ -134,6 +154,28 @@ export function CreateLeasePanel() {
       <TenantResolution resolved={resolved} />
       {partyError ? <p className="status status-bad">{partyError}</p> : null}
 
+      {/* Pay-monthly exists on the Wave-2 escrow only; the Sepolia build keeps the single prepaid flow. */}
+      {isMezo ? (
+        <div className="field">
+          <span className="field-label" id="pay-mode-label">
+            How the tenant pays
+          </span>
+          <div className="filter" role="group" aria-labelledby="pay-mode-label">
+            <button type="button" className={`chip${!monthly ? ' chip-on' : ''}`} aria-pressed={!monthly} onClick={() => setMonthly(false)}>
+              Prepay everything
+            </button>
+            <button type="button" className={`chip${monthly ? ' chip-on' : ''}`} aria-pressed={monthly} onClick={() => setMonthly(true)}>
+              Pay monthly
+            </button>
+          </div>
+          <div className="hint">
+            {monthly
+              ? 'The tenant starts with the deposit plus the first period, then pays the rest period by period. If a period stays unpaid past its due date and the one-period grace, the landlord can claim default and keep at most one period’s rent from the deposit.'
+              : 'The tenant funds the whole lease in one payment before it starts; rent still unlocks to you period by period.'}
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid-2">
         <Field label={`Deposit (${tokenSymbol})`} htmlFor="deposit">
           <input id="deposit" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} />
@@ -154,12 +196,22 @@ export function CreateLeasePanel() {
       </div>
 
       {termsValid ? (
-        <p className="summary">
-          The tenant prepays <strong>{formatToken(totalDue(depositUnits!, rentUnits!, periodCount!), tokenDecimals)} {tokenSymbol}</strong>:
-          a {formatToken(depositUnits!, tokenDecimals)} deposit plus {periodCount} × {formatToken(rentUnits!, tokenDecimals)} rent.
-          Rent unlocks to you every {formatDuration(periodSeconds!)}, and the deposit goes back to the tenant after{' '}
-          {formatDuration(periodSeconds! * periodCount!)}.
-        </p>
+        monthly ? (
+          <p className="summary">
+            The tenant starts with <strong>{formatToken(depositUnits! + rentUnits!, tokenDecimals)} {tokenSymbol}</strong>:{' '}
+            the {formatToken(depositUnits!, tokenDecimals)} deposit plus the first period’s rent. The other{' '}
+            {periodCount - 1} × {formatToken(rentUnits!, tokenDecimals)} are paid period by period from the tenant’s
+            trove or MUSD balance. Rent unlocks to you every {formatDuration(periodSeconds!)}, and the deposit goes back
+            to the tenant after {formatDuration(periodSeconds! * periodCount!)}.
+          </p>
+        ) : (
+          <p className="summary">
+            The tenant prepays <strong>{formatToken(totalDue(depositUnits!, rentUnits!, periodCount!), tokenDecimals)} {tokenSymbol}</strong>:
+            a {formatToken(depositUnits!, tokenDecimals)} deposit plus {periodCount} × {formatToken(rentUnits!, tokenDecimals)} rent.
+            Rent unlocks to you every {formatDuration(periodSeconds!)}, and the deposit goes back to the tenant after{' '}
+            {formatDuration(periodSeconds! * periodCount!)}.
+          </p>
+        )
       ) : (
         <p className="status status-bad">
           {tooShort
@@ -183,7 +235,7 @@ export function CreateLeasePanel() {
       ) : (
         <div className="actions">
           <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
-            Create lease
+            {monthly ? 'Create monthly lease' : 'Create lease'}
           </button>
           {!ready ? (
             <span className="hint">{connectToCreate}</span>

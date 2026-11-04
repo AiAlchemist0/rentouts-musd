@@ -498,7 +498,11 @@ export type LeaseRow = {
   periodSeconds: number
   periods: number
   periodsClaimed: number
+  /** V2: rent periods paid into the escrow (a monthly lease tops this up period by period). undefined on V1 rows. */
+  periodsFunded?: number
   startTime: bigint
+  /** V2: a pay-monthly lease (funding covers deposit + one period). undefined on V1 rows, which are prepaid. */
+  monthly?: boolean
   state: number
   claimablePeriods: number
   claimableAmount: bigint
