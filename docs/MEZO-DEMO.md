@@ -65,3 +65,34 @@ Terms: monthly lease #1, deposit **20 MUSD**, rent **10 MUSD per 120 s period**,
 | repayMUSD(50.05) on Mezo | [`0xf5e087ba…b8d4`](https://explorer.test.mezo.org/tx/0xf5e087baf31961631fbc78934549ed5e0f400f15a7d78efdce9aab265097b8d4) | Tenant repays the drawn MUSD + fees; trove ratio back to 149.8% |
 
 Trove before: 0.045 BTC collateral, ratio 149.5%, Mezo not in Recovery Mode (system ratio 281%). Every draw was checked against that first. The landlord ends with 30 MUSD of rent and the tenant gets the 20 MUSD deposit back. The proof transactions passed zero position hints, so each trove draw used about 5.3M gas; the app computes real hints from Mezo's HintHelpers.
+
+## Wave 2 — ending a lease early by agreement, and a dispute settled by the timeout (both closed)
+
+2026-11-04, same RentEscrowV2. Two prepaid leases between a wallet landlord (not the demo contract) and a second wallet as tenant, so each exit is signed by two different parties.
+
+| Role | Address |
+|---|---|
+| Landlord (allowlisted on LeaseShare1155) | `0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6` |
+| Tenant | `0xc262d36287DBe2Eda5cb3D776F9e527E24b51719` |
+
+Terms, both leases: deposit **20 MUSD**, rent **10 MUSD per 120 s period**, **3** periods, prepaid (50 MUSD in escrow).
+
+**Lease #2: mutual early termination.** The tenant proposes leaving early with a 5 MUSD penalty to the landlord; the landlord accepts the exact terms (the accept call carries a hash of them, so a changed proposal cannot be accepted). No arbiter is involved.
+
+| Step | Tx | Result |
+|---|---|---|
+| createLease(#2) | [`0x8c6672d5…f69d`](https://explorer.test.mezo.org/tx/0x8c6672d569a36cdc5f609a44b742d1c5fc5fc941764220c369bcebbd6276f69d) | Lease #2 created |
+| fundLease(2) | [`0xb71167f1…0c99`](https://explorer.test.mezo.org/tx/0xb71167f14c0d61d0bed15c904643d3b7cd7358e06ccbae2c4c77dfbdefe60c99) | 50 MUSD in escrow; lease ACTIVE |
+| proposeTermination(2, 5 MUSD) | [`0x9829ceb4…4610`](https://explorer.test.mezo.org/tx/0x9829ceb4957dc5912d438a6dc5b4a9049ab1aaf63a212b56d9d0538ea4344610) | Tenant proposes, one period in |
+| acceptTermination(2, termsHash) | [`0x6dd34072…8a6b`](https://explorer.test.mezo.org/tx/0x6dd34072ffb524cec337ba31bfe57ad0d63ac4bef4c62f644e639e0d089a8a6b) | Landlord +15 MUSD (10 earned rent + 5 penalty), tenant +35 MUSD (unearned rent + deposit − penalty); `escrowBalance(2)` = 0 |
+
+**Lease #3: dispute timeout.** The tenant opens a dispute; the arbiter does not rule; after the 600 s testnet timeout anyone can settle it at the status quo of the moment the dispute opened (no rent had been earned yet).
+
+| Step | Tx | Result |
+|---|---|---|
+| createLease(#3) | [`0x3ddeee92…9773`](https://explorer.test.mezo.org/tx/0x3ddeee928f7fb3dde6470182bbaed2a86599a8e33e96e51fab2e0eeb51a49773) | Lease #3 created |
+| fundLease(3) | [`0xcb2e17c5…ab90`](https://explorer.test.mezo.org/tx/0xcb2e17c5d16c357a9e3e04ddbb078be57b2f33c56a04f218c9c6466acc66ab90) | 50 MUSD in escrow; lease ACTIVE |
+| openDispute(3) | [`0x07f90cae…7171`](https://explorer.test.mezo.org/tx/0x07f90cae834b188f4ae7abefe04daf88af229899bd5580a88df57a7f4f037171) | Lease frozen, 0 periods earned |
+| resolveByTimeout(3) | [`0xc6583693…d487`](https://explorer.test.mezo.org/tx/0xc65836935d3a1c9c1dd9cca945d3ff129751e8845650e9e2d0180e886987d487) | Sent by the landlord after 600 s with no ruling: tenant +50 MUSD (all unearned rent + deposit); `escrowBalance(3)` = 0 |
+
+Amounts are read from the MUSD `Transfer` events in each settling transaction.
