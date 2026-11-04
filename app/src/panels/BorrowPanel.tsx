@@ -11,6 +11,7 @@ import { formatRounded, formatToken, parseToken } from '../lib/format'
 import { walletReadQuery } from '../lib/polling'
 import {
   bestRatioFor,
+  borrowHeadroom,
   collateralFor,
   collateralRatio,
   compositeDebt,
@@ -26,7 +27,7 @@ import { demoChain } from '../network'
 
 const RATIO_CHOICES = [160, 200, 250] as const
 /** BTC left in the wallet for gas when sizing a trove. */
-const GAS_KEEP = 200_000_000_000_000n // 0.0002 BTC
+export const GAS_KEEP = 200_000_000_000_000n // 0.0002 BTC
 const MEZO_APP = 'https://testnet.mezo.org'
 
 /** "0.05505" BTC, four to six significant decimals. */
@@ -74,7 +75,7 @@ function ProtocolStrip({ protocol, btc, musd }: { protocol: MezoProtocol; btc?: 
   )
 }
 
-function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | undefined }) {
+function OpenTrove({ protocol, btc, recoveryMode }: { protocol: MezoProtocol; btc: bigint | undefined; recoveryMode: boolean }) {
   const client = useDemoClient()
   const { ready } = useWallet()
   const tx = useTx()
@@ -82,12 +83,20 @@ function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | un
   const [amount, setAmount] = useState(String(minBorrow))
   // Until the user picks a ratio, use the safest one the wallet's BTC can carry (Mezo's faucet sends 0.05 BTC).
   const [picked, setPicked] = useState<number | null>(null)
+  // In Recovery Mode Mezo refuses any new debt under the critical ratio, so drop the choices below it.
+  const ccrPercent = ratioPercent(protocol.ccr)
+  let choices: readonly number[] = RATIO_CHOICES
+  if (recoveryMode) {
+    const above = RATIO_CHOICES.filter((p) => p >= ccrPercent)
+    // At least one chip survives: if the critical ratio sits above every preset, round it up to a 10% step.
+    choices = above.length > 0 ? above : [Math.ceil(ccrPercent / 10) * 10]
+  }
 
   const borrow = parseToken(amount, 18)
   const spendable = btc !== undefined && btc > GAS_KEEP ? btc - GAS_KEEP : 0n
   const fitting =
     btc !== undefined && borrow !== null
-      ? bestRatioFor(borrow, spendable, protocol.price, protocol.borrowingRate, protocol.gasCompensation, RATIO_CHOICES)
+      ? bestRatioFor(borrow, spendable, protocol.price, protocol.borrowingRate, protocol.gasCompensation, choices)
       : undefined
   const percent = picked ?? fitting ?? 200
   const maxBorrow = btc !== undefined ? maxNewBorrow(spendable, protocol.price, percentRatio(percent), protocol.borrowingRate, protocol.gasCompensation) : 0n
@@ -144,7 +153,7 @@ function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | un
             Collateral ratio
           </span>
           <div className="filter" role="group" aria-labelledby="ratio-label">
-            {RATIO_CHOICES.map((p) => (
+            {choices.map((p) => (
               <button
                 key={p}
                 type="button"
@@ -158,6 +167,7 @@ function OpenTrove({ protocol, btc }: { protocol: MezoProtocol; btc: bigint | un
           </div>
           <div className="hint">
             {picked === null && fitting !== undefined ? 'The safest ratio your BTC can carry. ' : ''}
+            {recoveryMode ? 'Recovery Mode: a new trove must start at 150% or above. ' : ''}
             Higher is safer: the BTC price can fall further before the trove is at risk.
           </div>
         </div>
@@ -226,9 +236,12 @@ function BorrowMore({ protocol, trove }: { protocol: MezoProtocol; trove: Trove 
   const { ready } = useWallet()
   const tx = useTx()
   const ratio = collateralRatio(trove.coll, trove.debt, protocol.price)
-  // Stay at or above 160% after the fee so the trove isn't near the line.
+  // Stay at or above 160% after the fee, and inside Mezo's borrowing capacity for this trove.
   const target = percentRatio(160)
-  const room = headroom(trove.coll, trove.debt, protocol.price, target)
+  const ratioRoom = headroom(trove.coll, trove.debt, protocol.price, target)
+  const capacityLeft = trove.maxBorrowingCapacity > trove.debt ? trove.maxBorrowingCapacity - trove.debt : 0n
+  const room = borrowHeadroom(trove.coll, trove.debt, protocol.price, target, trove.maxBorrowingCapacity)
+  const capped = capacityLeft < ratioRoom
   const maxBorrow = (room * ONE) / (ONE + protocol.borrowingRate)
   const [amount, setAmount] = useState('')
 
@@ -284,7 +297,17 @@ function BorrowMore({ protocol, trove }: { protocol: MezoProtocol; trove: Trove 
         label="Borrow more MUSD"
         htmlFor="borrow-more"
         hint={
-          maxBorrow > 0n ? (
+          trove.recoveryMode ? (
+            'Borrowing is paused while Mezo is in Recovery Mode.'
+          ) : maxBorrow > 0n && capped ? (
+            <>
+              Mezo caps this trove’s total debt at {formatRounded(trove.maxBorrowingCapacity, 18)} MUSD, so up to{' '}
+              <button type="button" className="linkish" onClick={() => setAmount(formatUnits(maxBorrow - (maxBorrow % ONE), 18))}>
+                {formatToken(maxBorrow - (maxBorrow % ONE), 18)} MUSD
+              </button>{' '}
+              — the ratio would allow more.
+            </>
+          ) : maxBorrow > 0n ? (
             <>
               Up to{' '}
               <button type="button" className="linkish" onClick={() => setAmount(formatUnits(maxBorrow - (maxBorrow % ONE), 18))}>
@@ -297,8 +320,15 @@ function BorrowMore({ protocol, trove }: { protocol: MezoProtocol; trove: Trove 
           )
         }
       >
-        <input id="borrow-more" inputMode="decimal" placeholder="e.g. 100" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <input id="borrow-more" inputMode="decimal" placeholder="e.g. 100" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={trove.recoveryMode} />
       </Field>
+
+      {trove.recoveryMode ? (
+        <Notice tone="warn">
+          Borrowing more is paused: Mezo is in Recovery Mode, and a borrow would lower this trove’s ratio, which it doesn’t
+          allow right now. <a href="#trove">Repay MUSD or add BTC in Your trove</a> instead.
+        </Notice>
+      ) : null}
 
       {borrow !== null && borrow > 0n ? (
         <p className={valid ? 'summary' : 'status status-bad'}>
@@ -314,10 +344,10 @@ function BorrowMore({ protocol, trove }: { protocol: MezoProtocol; trove: Trove 
       ) : null}
 
       <div className="actions">
-        <button type="submit" className="btn btn-primary" disabled={!ready || !valid || tx.busy}>
+        <button type="submit" className="btn btn-primary" disabled={!ready || !valid || tx.busy || trove.recoveryMode}>
           {valid ? `Borrow ${formatToken(borrow!, 18)} MUSD` : 'Borrow MUSD'}
         </button>
-        <ExtLink href={MEZO_APP}>Repay or add BTC on Mezo</ExtLink>
+        <a href="#trove">Repay or add BTC in Your trove</a>
       </div>
       <TxStatus state={tx.state} done="MUSD is in your wallet. Your BTC stays locked in the trove, still yours." />
       {tx.state.status === 'success' ? (
@@ -392,13 +422,13 @@ export function BorrowPanel() {
       ) : !protocol.data || trove.isPending ? null : trove.data?.status === TroveStatus.active ? (
         <BorrowMore protocol={protocol.data} trove={trove.data} />
       ) : (
-        <OpenTrove protocol={protocol.data} btc={btc?.value} />
+        <OpenTrove protocol={protocol.data} btc={btc?.value} recoveryMode={trove.data?.recoveryMode ?? false} />
       )}
 
       <p className="hint">
         This calls Mezo Borrow directly (<code>BorrowerOperations.openTrove</code> / <code>withdrawMUSD</code>). The trove
-        is yours, not RentOuts’: manage or repay it any time at <ExtLink href={MEZO_APP}>testnet.mezo.org</ExtLink>. Already
-        have MUSD? Skip to <a href="#fund">paying rent</a>.
+        is yours, not RentOuts’: manage or repay it any time in <a href="#trove">Your trove</a>, or at{' '}
+        <ExtLink href={MEZO_APP}>testnet.mezo.org</ExtLink>. Already have MUSD? Skip to <a href="#fund">paying rent</a>.
       </p>
     </div>
   )

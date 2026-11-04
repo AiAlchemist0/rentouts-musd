@@ -14,6 +14,7 @@ import { IdentityPanel } from './panels/IdentityPanel'
 import { LeasesPanel } from './panels/LeasesPanel'
 import { SharesPanel } from './panels/SharesPanel'
 import { BorrowPanel } from './panels/BorrowPanel'
+import { TrovePanel } from './panels/TrovePanel'
 import { MezoHero } from './components/MezoHero'
 
 type Step = { id: string; title: string; who: string; panel: () => ReactNode }
@@ -30,6 +31,7 @@ const SEPOLIA_STEPS: readonly Step[] = [
 const MEZO_STEPS: readonly Step[] = [
   { id: 'create', title: 'Get a lease', who: 'Tenant or landlord', panel: CreateLeasePanel },
   { id: 'borrow', title: 'Borrow MUSD', who: 'Tenant, against BTC', panel: BorrowPanel },
+  { id: 'trove', title: 'Your trove', who: 'Tenant, manage the risk', panel: TrovePanel },
   { id: 'fund', title: 'Pay in MUSD', who: 'Tenant', panel: FundPanel },
   { id: 'run', title: 'Run the lease', who: 'Landlord and tenant', panel: LeasesPanel },
   { id: 'shares', title: 'Lease shares', who: 'Landlord', panel: SharesPanel },

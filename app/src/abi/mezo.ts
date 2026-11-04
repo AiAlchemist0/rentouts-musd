@@ -17,6 +17,10 @@ export const borrowerOperationsAbi = parseAbi([
   'function openTrove(uint256 _debtAmount, address _upperHint, address _lowerHint) payable',
   'function withdrawMUSD(uint256 _amount, address _upperHint, address _lowerHint)',
   'function addColl(address _upperHint, address _lowerHint) payable',
+  // repayMUSD burns the MUSD straight from the caller: no token approval is needed.
+  'function repayMUSD(uint256 _amount, address _upperHint, address _lowerHint)',
+  'function withdrawColl(uint256 _amount, address _upperHint, address _lowerHint)',
+  'function closeTrove()',
   'function getBorrowingFee(uint256 _debt) view returns (uint256)',
   'function minNetDebt() view returns (uint256)',
   'function MCR() view returns (uint256)',
@@ -28,6 +32,12 @@ export const borrowerOperationsAbi = parseAbi([
 export const troveManagerAbi = parseAbi([
   'function getTroveStatus(address _borrower) view returns (uint8)',
   'function getEntireDebtAndColl(address _borrower) view returns (uint256 coll, uint256 principal, uint256 interest, uint256 pendingCollateral, uint256 pendingPrincipal, uint256 pendingInterest)',
+  // Signatures verified against mezo-org/musd solidity/contracts/interfaces/ITroveManager.sol.
+  'function getCurrentICR(address _borrower, uint256 _price) view returns (uint256)',
+  'function getTCR(uint256 _price) view returns (uint256)',
+  'function checkRecoveryMode(uint256 _price) view returns (bool)',
+  'function getTroveMaxBorrowingCapacity(address _borrower) view returns (uint256)',
+  'function getTroveDebt(address _borrower) view returns (uint256)',
 ])
 
 export const hintHelpersAbi = parseAbi([

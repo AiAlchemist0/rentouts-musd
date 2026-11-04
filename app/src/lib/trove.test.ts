@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   bestRatioFor,
+  borrowHeadroom,
   btcFor,
   collateralFor,
   collateralRatio,
+  collToReach,
   compositeDebt,
   headroom,
   liquidationPrice,
@@ -11,6 +13,8 @@ import {
   ONE,
   percentRatio,
   ratioPercent,
+  riskLevel,
+  withdrawableColl,
 } from './trove'
 
 const price = 80_000n * ONE // $80,000 per BTC
@@ -84,5 +88,64 @@ describe('fitting a new trove to the wallet', () => {
     expect(bestRatioFor(musd(1800), faucet, price, rate, gas, [160, 200, 250])).toBe(160)
     expect(bestRatioFor(musd(1800), ONE, price, rate, gas, [160, 200, 250])).toBe(250)
     expect(bestRatioFor(musd(1800), ONE / 100n, price, rate, gas, [160, 200, 250])).toBeUndefined()
+  })
+})
+
+describe('managing an open trove', () => {
+  // 0.1 BTC at $80,000 carries 8,000 USD; 2,500 MUSD owed -> 320%.
+  const coll = ONE / 10n
+  const debt = musd(2500)
+  const capacity = musd(7272) // coll * price / 110%, what Mezo records at open
+
+  it('borrows up to the tighter of the ratio room and the capacity cap', () => {
+    // Ratio binds: 8,000/2 - 2,500 = 1,500 at 200%; capacity allows 4,772 more.
+    expect(borrowHeadroom(coll, debt, price, percentRatio(200), capacity)).toBe(musd(1500))
+    // Capacity binds: asking for 150% leaves ratio room of 2,833, but the cap allows only 472.
+    expect(borrowHeadroom(coll, debt, price, percentRatio(150), musd(2972))).toBe(musd(472))
+  })
+
+  it('never reports negative borrowing headroom', () => {
+    expect(borrowHeadroom(coll, musd(9000), price, percentRatio(200), capacity)).toBe(0n)
+    expect(borrowHeadroom(coll, debt, price, percentRatio(200), musd(1000))).toBe(0n)
+    expect(borrowHeadroom(coll, debt, price, percentRatio(200), 0n)).toBe(0n)
+  })
+
+  it('computes the BTC to add to reach a ratio, rounded up', () => {
+    // 2,500 MUSD at 200% needs 0.0625 BTC; 0.05 locked -> 0.0125 to add.
+    expect(collToReach(ONE / 20n, debt, price, percentRatio(200))).toBe(12_500_000_000_000_000n)
+    expect(collateralRatio(ONE / 20n + 12_500_000_000_000_000n, debt, price) >= percentRatio(200)).toBe(true)
+  })
+
+  it('asks for no collateral when the trove already sits above the ratio', () => {
+    expect(collToReach(coll, debt, price, percentRatio(200))).toBe(0n)
+    expect(collToReach(coll, debt, price, percentRatio(300))).toBe(0n)
+  })
+
+  it('caps withdrawals at the ratio the trove must keep', () => {
+    // 0.1 BTC at 200% keeps 0.0625 BTC locked; 0.0375 can come out. At 150% only 0.046875 must stay.
+    expect(withdrawableColl(coll, debt, price, percentRatio(200))).toBe(37_500_000_000_000_000n)
+    expect(withdrawableColl(coll, debt, price, percentRatio(150))).toBe(53_125_000_000_000_000n)
+    expect(collateralRatio(coll - 53_125_000_000_000_000n, debt, price) >= percentRatio(150)).toBe(true)
+  })
+
+  it('allows no withdrawal when the trove is already under the floor', () => {
+    expect(withdrawableColl(coll, musd(6000), price, percentRatio(150))).toBe(0n)
+    expect(withdrawableColl(0n, debt, price, percentRatio(150))).toBe(0n)
+  })
+
+  it('sorts risk: safe from 200%, watch from 150%, danger below', () => {
+    expect(riskLevel(percentRatio(200), percentRatio(150), false)).toBe('safe')
+    expect(riskLevel(percentRatio(250), percentRatio(150), true)).toBe('safe')
+    expect(riskLevel(percentRatio(199), percentRatio(150), false)).toBe('watch')
+    expect(riskLevel(percentRatio(150), percentRatio(150), false)).toBe('watch')
+    expect(riskLevel(percentRatio(149), percentRatio(150), false)).toBe('danger')
+    expect(riskLevel(percentRatio(120), percentRatio(150), false)).toBe('danger')
+  })
+
+  it('calls a trove under the critical ratio danger while the system is in Recovery Mode', () => {
+    // Normal mode: 155% is only watch. Recovery Mode with CCR at 160%: liquidations reach 160%, so danger.
+    expect(riskLevel(percentRatio(155), percentRatio(150), false)).toBe('watch')
+    expect(riskLevel(percentRatio(155), percentRatio(160), true)).toBe('danger')
+    expect(riskLevel(percentRatio(165), percentRatio(160), true)).toBe('watch')
   })
 })
