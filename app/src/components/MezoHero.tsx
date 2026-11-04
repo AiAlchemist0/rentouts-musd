@@ -41,7 +41,7 @@ export function MezoHero() {
       </p>
       <div className="hero-cta">
         <a className="btn btn-primary btn-lg" href="#create">
-          Try it with one wallet
+          Get a lease
         </a>
         <a className="btn btn-quiet btn-lg" href="#run">
           See a live lease

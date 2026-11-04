@@ -9,13 +9,18 @@ import { describe, expect, it } from 'vitest'
 import { aiArbiterAbi } from '../abi/aiArbiter'
 import { leaseShareAbi } from '../abi/leaseShare'
 import { rentEscrowAbi } from '../abi/rentEscrow'
+import { rentEscrowV2Abi } from '../abi/rentEscrowV2'
 import { rentoutsSubnamesAbi } from '../abi/rentoutsSubnames'
 import { describeError, errorMessage } from './errors'
 
 const alice = '0x484811c8c967809bE644A89d677933c29fb9e936'
 
 /** What simulateContract throws when `abi` is the ABI of the contract that was called. */
-function revert(abi: typeof rentEscrowAbi | typeof rentoutsSubnamesAbi | typeof aiArbiterAbi, functionName: string, data: `0x${string}`) {
+function revert(
+  abi: typeof rentEscrowAbi | typeof rentoutsSubnamesAbi | typeof aiArbiterAbi | typeof rentEscrowV2Abi,
+  functionName: string,
+  data: `0x${string}`,
+) {
   return new ContractFunctionExecutionError(new ContractFunctionRevertedError({ abi, data, functionName }), {
     abi,
     functionName,
@@ -64,6 +69,34 @@ describe('describeError', () => {
   it('falls back to the error name', () => {
     expect(describeError('SomethingNew')).toBe('The contract reverted with SomethingNew.')
   })
+
+  it('maps the Wave-2 escrow’s funding errors', () => {
+    expect(describeError('MezoDisabled')).toMatch(/can’t relay Mezo trove operations/)
+    expect(describeError('StrayBtc', [123n])).toMatch(/only ever holds MUSD/)
+    expect(describeError('InsufficientBorrowed', [3n, 1_250n * 10n ** 18n, 1_800n * 10n ** 18n])).toBe(
+      'The trove operation sent the escrow 1,250.00 of the 1,800.00 the lease needs, so the lease wasn’t funded. The Mezo permission may already have been used elsewhere; sign again, or pay with MUSD you already have.',
+    )
+    // Without decodable amounts the sentence still stands alone.
+    expect(describeError('InsufficientBorrowed', [3n])).toMatch(/^The trove operation sent the escrow less MUSD/)
+  })
+
+  it('maps the early-termination errors', () => {
+    expect(describeError('NoProposal', [3n])).toBe('Lease #3 has no open early-end offer (never made, or already withdrawn, replaced or accepted).')
+    expect(describeError('NotProposer', [3n])).toMatch(/Only the wallet that made this early-end offer/)
+    expect(describeError('ProposalExpired', [3n])).toMatch(/expired before it was accepted/)
+    expect(describeError('WrongTermsHash', [3n])).toMatch(/The offer changed on-chain/)
+    expect(describeError('ProposerCannotAccept', [3n])).toMatch(/The other side must accept/)
+    expect(describeError('InvalidExpiry', [3n, 1n])).toMatch(/expiry must be in the future/)
+    expect(describeError('PenaltyTooHigh', [3n, 100n * 10n ** 18n, 60n * 10n ** 18n])).toBe(
+      'The penalty is more than the tenant’s side (unearned rent + deposit), which is 60.00 MUSD now. Lower it and try again.',
+    )
+    expect(describeError('PenaltyTooHigh', [3n])).toMatch(/more than the tenant’s side/)
+  })
+
+  it('maps the dispute-timeout and unbooked-pot errors', () => {
+    expect(describeError('DisputeNotTimedOut', [3n])).toMatch(/timeout hasn’t passed/)
+    expect(describeError('InsufficientUnbooked', [100n, 50n])).toMatch(/unbooked pot/)
+  })
 })
 
 describe('errorMessage', () => {
@@ -75,6 +108,15 @@ describe('errorMessage', () => {
   it('decodes an error bubbled up from another contract (LeaseShare1155 via the escrow)', () => {
     const data = encodeErrorResult({ abi: leaseShareAbi, errorName: 'NotAllowlisted', args: [alice] })
     expect(errorMessage(revert(rentEscrowAbi, 'createLease', data))).toMatch(/^0x4848…e936 isn’t on the lease-share compliance allowlist/)
+  })
+
+  it('decodes Wave-2 reverts from borrowAndFund, including on an ABI that doesn’t list them', () => {
+    const data = encodeErrorResult({ abi: rentEscrowV2Abi, errorName: 'InsufficientBorrowed', args: [3n, 0n, 1_800n * 10n ** 18n] })
+    expect(errorMessage(revert(rentEscrowV2Abi, 'borrowAndFund', data))).toMatch(/of the 1,800\.00 the lease needs/)
+    // Decoded against knownErrorsAbi even when the called contract's ABI has no Wave-2 errors.
+    expect(errorMessage(revert(rentoutsSubnamesAbi, 'register', data))).toMatch(/trove operation sent the escrow/)
+    const penalty = encodeErrorResult({ abi: rentEscrowV2Abi, errorName: 'PenaltyTooHigh', args: [3n, 100n, 60n] })
+    expect(errorMessage(revert(rentEscrowV2Abi, 'proposeTermination', penalty))).toMatch(/tenant’s side/)
   })
 
   it('decodes a NotVerifiedHuman revert from fundLease', () => {

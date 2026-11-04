@@ -30,6 +30,8 @@ const RATIO_CHOICES = [160, 200, 250] as const
 export const GAS_KEEP = 200_000_000_000_000n // 0.0002 BTC
 const MEZO_APP = 'https://testnet.mezo.org'
 
+export { RATIO_CHOICES }
+
 /** "0.05505" BTC, four to six significant decimals. */
 export function formatBtc(amount: bigint): string {
   const n = Number(formatUnits(amount, 18))
@@ -48,7 +50,8 @@ function ratioTone(ratio: bigint, protocol: MezoProtocol): 'ok' | 'warn' | 'bad'
   return 'ok'
 }
 
-function RatioValue({ ratio, protocol }: { ratio: bigint; protocol: MezoProtocol }) {
+/** A collateral ratio, coloured by how close it is to the liquidation line. */
+export function RatioValue({ ratio, protocol }: { ratio: bigint; protocol: MezoProtocol }) {
   return <span className={`ratio ratio-${ratioTone(ratio, protocol)}`}>{ratioPercent(ratio)}%</span>
 }
 

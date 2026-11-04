@@ -4,11 +4,10 @@ import { useReadContract } from 'wagmi'
 import { connectToCreate, demoChain, isMezo } from '../network'
 import { DemoLeaseCard } from './DemoLeaseCard'
 import { leaseShareAbi } from '../abi/leaseShare'
-import { rentEscrowAbi } from '../abi/rentEscrow'
 import { CredentialCard } from '../components/CredentialCard'
 import { AddressLink, Field, Notice, NotConfigured, TxStatus } from '../components/ui'
-import { LEASE_DEFAULTS } from '../config'
-import { useAddressInput, useContracts, useParentName, useRentoutsNames, useTx, useWallet, type ResolvedInput } from '../hooks'
+import { DEMO_LANDLORD, LEASE_DEFAULTS } from '../config'
+import { activeEscrowAbi, useAddressInput, useContracts, useParentName, useRentoutsNames, useTx, useWallet, type ResolvedInput } from '../hooks'
 import { formatDuration, formatToken, parseToken, parseWhole } from '../lib/format'
 import { leasePartyProblem, totalDue } from '../lib/lease'
 
@@ -90,12 +89,12 @@ export function CreateLeasePanel() {
     setCreatedId(null)
     const receipt = await tx.run({
       address: escrow,
-      abi: rentEscrowAbi,
+      abi: activeEscrowAbi,
       functionName: 'createLease',
       args: [tenant, depositUnits, rentUnits, periodSeconds!, periodCount!],
     }, `Create lease for ${resolved.kind === 'name' ? resolved.name : tenant}`)
     if (receipt) {
-      const [created] = parseEventLogs({ abi: rentEscrowAbi, eventName: 'LeaseCreated', logs: receipt.logs })
+      const [created] = parseEventLogs({ abi: activeEscrowAbi, eventName: 'LeaseCreated', logs: receipt.logs })
       setCreatedId(created?.args.leaseId ?? null)
     }
   }
@@ -111,8 +110,9 @@ export function CreateLeasePanel() {
         </p>
       </div>
 
+      {/* The demo landlord is bound to the first Mezo escrow, so on Wave-2 only the plain form shows. */}
       {isMezo ? <DemoLeaseCard /> : null}
-      {isMezo ? <h3 className="section-title">Or list your own lease as a landlord</h3> : null}
+      {isMezo && DEMO_LANDLORD ? <h3 className="section-title">Or list your own lease as a landlord</h3> : null}
 
       {escrowError ? <Notice tone="error">{escrowError}</Notice> : null}
       {tokenError ? <Notice tone="error">{tokenError}</Notice> : null}

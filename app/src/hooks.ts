@@ -19,6 +19,7 @@ import { borrowerOperationsAbi, hintHelpersAbi, MEZO_BORROW, priceFeedAbi, sorte
 import { erc20Abi } from './abi/erc20'
 import { humanGateAbi } from './abi/humanGate'
 import { rentEscrowAbi } from './abi/rentEscrow'
+import { rentEscrowV2Abi, type TerminationRow } from './abi/rentEscrowV2'
 import { rentoutsSubnamesAbi } from './abi/rentoutsSubnames'
 import { CREDENTIAL_KEYS, ENS, ENV_CONTRACTS, JUDGE_ENS_NAME } from './config'
 import { demoChain, fallbackDecimals, fallbackSymbol, isMezo, switchFirstCopy } from './network'
@@ -72,6 +73,13 @@ export function useWallet() {
 
 // ------------------------------------------------------------------ contracts
 
+/**
+ * The ABI of the active escrow: RentEscrowV2 on the Mezo build (borrow-and-pay, early termination,
+ * dispute timeout), RentEscrow (V1) on Sepolia. The views both share (getLease, claimable, …) have
+ * identical signatures, so panels written against V1 keep working against V2.
+ */
+export const activeEscrowAbi = isMezo ? rentEscrowV2Abi : rentEscrowAbi
+
 export type AppContracts = {
   escrow?: Address
   token: Address
@@ -80,6 +88,10 @@ export type AppContracts = {
   arbiter?: Address
   /** RentEscrow.humanGate(), checked in fundLease. undefined = funding not gated (or not read yet). */
   humanGate?: Address
+  /** Wave-2: Mezo's BorrowerOperationsSignatures the one-transaction borrow-and-pay signs against. */
+  borrowerOpsSignatures?: Address
+  /** Wave-2: seconds a dispute stays open before anyone may settle it by timeout. */
+  disputeTimeout?: number
   minPeriod?: number
   sharesPerLease?: bigint
   /** Display values: 6 / 'USDC' until the token is read. Build amounts only once tokenMetaReady. */
@@ -116,7 +128,17 @@ export function useContracts(): AppContracts {
         client.readContract({ ...at, functionName: 'MIN_PERIOD' }),
         client.readContract({ ...at, functionName: 'SHARES_PER_LEASE' }),
       ])
-      return { token, leaseShare, arbiter, humanGate, minPeriod, sharesPerLease }
+      // The Wave-2 immutables (same shape in every funding path's error copy). On the Sepolia build
+      // (V1 escrow) this branch folds away; the reads only exist on the V2 ABI.
+      let borrowerOpsSignatures: Address | undefined
+      let disputeTimeout: bigint | undefined
+      if (isMezo) {
+        ;[borrowerOpsSignatures, disputeTimeout] = await Promise.all([
+          client.readContract({ address: escrow!, abi: rentEscrowV2Abi, functionName: 'borrowerOpsSignatures' }),
+          client.readContract({ address: escrow!, abi: rentEscrowV2Abi, functionName: 'disputeTimeout' }),
+        ])
+      }
+      return { token, leaseShare, arbiter, humanGate, minPeriod, sharesPerLease, borrowerOpsSignatures, disputeTimeout }
     },
   })
 
@@ -145,6 +167,12 @@ export function useContracts(): AppContracts {
     credentialSync: ENV_CONTRACTS.credentialSync,
     arbiter: onChain?.arbiter ?? ENV_CONTRACTS.arbiter,
     humanGate,
+    // Until the escrow is read, deployments.json's record of the same escrow stands in (Wave-2 fields).
+    borrowerOpsSignatures:
+      onChain && onChain.borrowerOpsSignatures !== zeroAddress
+        ? (onChain.borrowerOpsSignatures as Address)
+        : ENV_CONTRACTS.borrowerOpsSignatures,
+    disputeTimeout: onChain?.disputeTimeout !== undefined ? Number(onChain.disputeTimeout) : ENV_CONTRACTS.disputeTimeout,
     minPeriod: onChain?.minPeriod,
     sharesPerLease: onChain?.sharesPerLease,
     tokenDecimals: tokenMeta.data?.decimals ?? fallbackDecimals,
@@ -481,35 +509,38 @@ const MAX_LEASES = 200
 
 /**
  * Every lease, newest first: nextLeaseId, then getLease / claimable / escrowBalance for ids 1..n-1 in
- * three multicalls. Iterating ids avoids eth_getLogs range limits on public RPCs.
+ * three multicalls. Iterating ids avoids eth_getLogs range limits on public RPCs. Defaults to the
+ * active escrow's ABI; pass rentEscrowAbi to read the V1 Mezo escrow (identical view signatures).
  */
-export function useLeases(escrow: Address | undefined) {
+export function useLeases(
+  escrow: Address | undefined,
+  abi: typeof rentEscrowAbi | typeof rentEscrowV2Abi = activeEscrowAbi,
+) {
   const client = useDemoClient()
   return useQuery({
-    queryKey: ['leases', escrow],
+    queryKey: ['leases', escrow, abi === rentEscrowAbi ? 'v1' : 'active'],
     enabled: !!escrow,
     refetchInterval: 12_000,
     queryFn: async (): Promise<LeaseRow[]> => {
-      const at = { address: escrow!, abi: rentEscrowAbi } as const
+      const at = { address: escrow!, abi } as const
       const next = await client.readContract({ ...at, functionName: 'nextLeaseId' })
       const first = next - 1n > BigInt(MAX_LEASES) ? next - BigInt(MAX_LEASES) : 1n
       const ids: bigint[] = []
       for (let id = next - 1n; id >= first; id--) ids.push(id)
       if (ids.length === 0) return []
-      const [leases, claimables, balances] = await Promise.all([
+      // getLease / claimable / escrowBalance share signatures across both ABIs; the result shapes are
+      // asserted once here instead of per multicall.
+      type RawLease = Omit<LeaseRow, 'id' | 'claimablePeriods' | 'claimableAmount' | 'escrowBalance'>
+      const readMany = (functionName: 'getLease' | 'claimable' | 'escrowBalance') =>
         client.multicall({
           allowFailure: false,
-          contracts: ids.map((id) => ({ ...at, functionName: 'getLease' as const, args: [id] as const })),
-        }),
-        client.multicall({
-          allowFailure: false,
-          contracts: ids.map((id) => ({ ...at, functionName: 'claimable' as const, args: [id] as const })),
-        }),
-        client.multicall({
-          allowFailure: false,
-          contracts: ids.map((id) => ({ ...at, functionName: 'escrowBalance' as const, args: [id] as const })),
-        }),
-      ])
+          contracts: ids.map((id) => ({ address: escrow!, abi, functionName, args: [id] })),
+        }) as Promise<unknown[]>
+      const [leases, claimables, balances] = (await Promise.all([
+        readMany('getLease'),
+        readMany('claimable'),
+        readMany('escrowBalance'),
+      ])) as [RawLease[], [number, bigint][], bigint[]]
       return ids.map((id, i) => ({
         id,
         ...leases[i],
@@ -517,6 +548,33 @@ export function useLeases(escrow: Address | undefined) {
         claimableAmount: claimables[i][1],
         escrowBalance: balances[i],
       }))
+    },
+  })
+}
+
+/** The Wave-2 extras the lease screen shows: the open termination offer and each dispute's clock. */
+export function useV2Extras(escrow: Address | undefined, leaseIds: readonly bigint[]) {
+  const client = useDemoClient()
+  const key = leaseIds.map(String).join(',')
+  return useQuery({
+    queryKey: ['escrow-v2-extras', escrow, key],
+    enabled: isMezo && !!escrow && leaseIds.length > 0,
+    refetchInterval: 12_000,
+    queryFn: async (): Promise<{
+      terminations: TerminationRow[]
+      disputeOpenedAt: bigint[]
+    }> => {
+      const contracts = (functionName: 'termination' | 'disputeOpenedAt') =>
+        leaseIds.map((id) => ({ address: escrow!, abi: rentEscrowV2Abi, functionName, args: [id] }) as const)
+      const terminations = (await client.multicall({
+        allowFailure: false,
+        contracts: contracts('termination'),
+      })) as TerminationRow[]
+      const disputeOpenedAt = (await client.multicall({
+        allowFailure: false,
+        contracts: contracts('disputeOpenedAt'),
+      })) as bigint[]
+      return { terminations, disputeOpenedAt }
     },
   })
 }
@@ -809,7 +867,7 @@ export function useEscrowStats() {
         allowFailure: false,
         contracts: [
           { address: token, abi: erc20Abi, functionName: 'balanceOf', args: [escrow!] },
-          { address: escrow!, abi: rentEscrowAbi, functionName: 'nextLeaseId' },
+          { address: escrow!, abi: activeEscrowAbi, functionName: 'nextLeaseId' },
         ],
       })
       return { locked, leases: next - 1n }

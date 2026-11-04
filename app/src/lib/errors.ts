@@ -11,18 +11,21 @@ import { credentialSyncAbi } from '../abi/credentialSync'
 import { erc20Abi } from '../abi/erc20'
 import { leaseShareAbi } from '../abi/leaseShare'
 import { rentEscrowAbi } from '../abi/rentEscrow'
+import { rentEscrowV2Abi } from '../abi/rentEscrowV2'
 import { rentoutsSubnamesAbi } from '../abi/rentoutsSubnames'
 import { RulingStatus } from './aiJudge'
-import { shortAddress } from './format'
+import { shortAddress, formatToken } from './format'
 import { STATE_LABELS } from './lease'
 
 /**
- * Every custom error the app can meet. The escrow bubbles up errors from LeaseShare1155 and the token (and
- * AIArbiter those of the escrow), so a revert is decoded against all of them, not just the ABI of the contract
- * that was called. Errors both declare (NotParty, InvalidBps, ZeroAddress) have identical signatures.
+ * Every custom error the app can meet. The escrow bubbles up errors from LeaseShare1155, the token and
+ * Mezo's trove contracts (and AIArbiter those of the escrow), so a revert is decoded against all of
+ * them, not just the ABI of the contract that was called. Errors both escrows declare (InvalidState,
+ * NotParty, …) have identical signatures.
  */
 export const knownErrorsAbi = [
   ...rentEscrowAbi,
+  ...rentEscrowV2Abi,
   ...aiArbiterAbi,
   ...rentoutsSubnamesAbi,
   ...leaseShareAbi,
@@ -31,6 +34,15 @@ export const knownErrorsAbi = [
 ].filter((item) => item.type === 'error')
 
 const leaseRef = (args: readonly unknown[]) => (args[0] !== undefined ? `Lease #${String(args[0])}` : 'This lease')
+
+/** An 18-decimal error argument as MUSD, e.g. "1,550.00"; undefined when it isn't a number. */
+const musd = (value: unknown) => {
+  try {
+    return formatToken(BigInt(value as bigint), 18)
+  } catch {
+    return undefined
+  }
+}
 
 /** Why AIArbiter has no open proposal to appeal or execute, by its Status. */
 const NO_OPEN_PROPOSAL: Record<number, string> = {
@@ -86,6 +98,36 @@ export function describeError(name: string, args: readonly unknown[] = []): stri
       return 'The tenant’s share must be between 0% and 100%.'
     case 'NotVerifiedHuman':
       return `${args[0] ? shortAddress(String(args[0])) : 'This wallet'} hasn’t passed the escrow’s human verification (World ID 4.0: not registered in the gate), so it can’t fund a lease.`
+    // RentEscrowV2 (Wave-2)
+    case 'MezoDisabled':
+      return 'This escrow can’t relay Mezo trove operations, so one-transaction borrowing is off. Pay with MUSD you already have instead.'
+    case 'InsufficientBorrowed': {
+      const received = musd(args[1])
+      const owed = musd(args[2])
+      return `The trove operation sent the escrow ${received ?? 'less MUSD'}${owed ? ` of the ${owed} the lease needs` : ''}, so the lease wasn’t funded. The Mezo permission may already have been used elsewhere; sign again, or pay with MUSD you already have.`
+    }
+    case 'StrayBtc':
+      return 'A BTC transfer reached the escrow, which only ever holds MUSD. It was refused and sent back.'
+    case 'DisputeNotTimedOut':
+      return 'The dispute timeout hasn’t passed yet. Wait for the countdown, or the arbiter can still rule.'
+    case 'NoProposal':
+      return `${leaseRef(args)} has no open early-end offer (never made, or already withdrawn, replaced or accepted).`
+    case 'NotProposer':
+      return `Only the wallet that made this early-end offer can withdraw it.`
+    case 'ProposalExpired':
+      return 'This early-end offer expired before it was accepted. Ask for a fresh one.'
+    case 'WrongTermsHash':
+      return 'The offer changed on-chain (replaced or renewed). Check the new terms, then accept again.'
+    case 'ProposerCannotAccept':
+      return 'The wallet that made this offer can’t accept it. The other side must accept.'
+    case 'InvalidExpiry':
+      return 'The offer’s expiry must be in the future. Pick a longer window.'
+    case 'PenaltyTooHigh': {
+      const tenantSide = musd(args[2])
+      return `The penalty is more than the tenant’s side (unearned rent + deposit)${tenantSide ? `, which is ${tenantSide} MUSD now` : ''}. Lower it and try again.`
+    }
+    case 'InsufficientUnbooked':
+      return 'More MUSD was requested than the unbooked pot holds. Nothing of any lease’s escrow can be moved.'
     // AIArbiter
     case 'NotHuman':
       return 'Only the human arbiter can do this.'
@@ -133,10 +175,10 @@ export function describeError(name: string, args: readonly unknown[] = []): stri
       return 'Only the share holder can move these shares.'
     // Token
     case 'ERC20InsufficientBalance':
-      return 'Not enough USDC in this wallet.'
+      return 'Not enough of the escrow’s token in this wallet.'
     case 'ERC20InsufficientAllowance':
     case 'SafeERC20FailedOperation':
-      return 'The token transfer failed. Check your USDC balance and approve the escrow for the full amount.'
+      return 'The token transfer failed. Check your balance and approve the escrow for the full amount.'
     default:
       return `The contract reverted with ${name}.`
   }

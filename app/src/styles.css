@@ -838,6 +838,23 @@ input[type='range'] {
   flex-wrap: wrap;
   gap: 10px;
 }
+/* Divider between the one-transaction borrow-and-pay and the plain MUSD path (Mezo). */
+.pay-alt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.pay-alt::before,
+.pay-alt::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
 
 /* ------------------------------------------------------------------ leases */
 
@@ -967,6 +984,27 @@ input[type='range'] {
   gap: 10px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+/* ------------------------------------------------------------------ early end by agreement (Wave-2) */
+
+.term {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: var(--r-m);
+  border: 1px solid var(--line);
+  background: var(--inset);
+}
+.term > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.term[open] > summary {
+  color: var(--faint);
 }
 
 /* ------------------------------------------------------------------ AI dispute judge */
