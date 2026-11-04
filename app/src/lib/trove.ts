@@ -85,3 +85,42 @@ export function bestRatioFor(
   const debt = compositeDebt(borrow, (borrow * borrowingRate) / ONE, gasCompensation)
   return [...percents].sort((a, b) => b - a).find((p) => collateralFor(debt, percentRatio(p), price) <= coll)
 }
+
+/**
+ * MUSD an existing trove can still borrow (before the fee) and stay at `targetRatio` AND inside Mezo's
+ * `maxBorrowingCapacity` — the contract refuses any debt increase past that cap. Never negative.
+ */
+export function borrowHeadroom(coll: bigint, debt: bigint, price: bigint, targetRatio: bigint, maxBorrowingCapacity: bigint): bigint {
+  const byRatio = headroom(coll, debt, price, targetRatio)
+  const byCapacity = maxBorrowingCapacity > debt ? maxBorrowingCapacity - debt : 0n
+  return byRatio < byCapacity ? byRatio : byCapacity
+}
+
+/** BTC to add so `coll` carries `debt` at `targetRatio`: 0 when it already sits above, rounded up. */
+export function collToReach(coll: bigint, debt: bigint, price: bigint, targetRatio: bigint): bigint {
+  const need = collateralFor(debt, targetRatio, price)
+  return need > coll ? need - coll : 0n
+}
+
+/** Most BTC a trove can withdraw and still sit at `minRatio`. Never negative. */
+export function withdrawableColl(coll: bigint, debt: bigint, price: bigint, minRatio: bigint): bigint {
+  const keep = collateralFor(debt, minRatio, price)
+  return coll > keep ? coll - keep : 0n
+}
+
+export type RiskLevel = 'safe' | 'watch' | 'danger'
+
+/**
+ * How close the trove is to its liquidation line, for the ratio's colour and wording. Thresholds, all
+ * computed from ICR = coll × price / debt:
+ * - safe:   200% or more. The BTC price must halve (roughly) before the trove is at risk.
+ * - watch:  150% up to 200%. Fine today; a BTC price drop eats the margin.
+ * - danger: under 150% — and, in Recovery Mode, under the critical ratio CCR (150% today), where troves
+ *   can be liquidated while the system heals. Under 120% is always danger: it is 10% above the 110%
+ *   liquidation line, one bad price feed away.
+ */
+export function riskLevel(icr: bigint, ccr: bigint, recoveryMode: boolean): RiskLevel {
+  if (icr >= percentRatio(200)) return 'safe'
+  const line = recoveryMode && ccr > percentRatio(150) ? ccr : percentRatio(150)
+  return icr >= line ? 'watch' : 'danger'
+}

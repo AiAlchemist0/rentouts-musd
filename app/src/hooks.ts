@@ -710,9 +710,23 @@ export type Trove = {
   coll: bigint
   /** MUSD owed: principal + interest, including pending amounts. */
   debt: bigint
+  /** Collateral ratio at `price`, from TroveManager.getCurrentICR (max uint for zero debt). */
+  icr: bigint
+  /** USD per BTC when this trove was read; icr, tcr and recoveryMode all use it. */
+  price: bigint
+  /** The whole system's collateral ratio at `price`. */
+  tcr: bigint
+  /** Recovery Mode: the system ratio is under the critical ratio (150%). */
+  recoveryMode: boolean
+  /** Total debt Mezo still lets this trove carry (recorded at 110% when it was opened or lowered). */
+  maxBorrowingCapacity: bigint
 }
 
-/** The account's Mezo trove (status 1 = active). */
+/**
+ * The account's Mezo trove (status 1 = active) with everything the panel needs to judge its risk: the
+ * price first, then ICR, TCR, Recovery Mode and the borrowing capacity at that price. Refetched every
+ * 30 s and after every transaction this app sends (useTx invalidates all queries).
+ */
 export function useTrove(account: Address | undefined) {
   const client = useDemoClient()
   return useQuery({
@@ -720,12 +734,17 @@ export function useTrove(account: Address | undefined) {
     enabled: isMezo && !!account,
     refetchInterval: 30_000,
     queryFn: async (): Promise<Trove> => {
+      const price = await client.readContract({ address: MEZO_BORROW.priceFeed, abi: priceFeedAbi, functionName: 'fetchPrice' })
       const tm = { address: MEZO_BORROW.troveManager, abi: troveManagerAbi } as const
-      const [status, entire] = await client.multicall({
+      const [status, entire, icr, tcr, recoveryMode, capacity] = await client.multicall({
         allowFailure: false,
         contracts: [
           { ...tm, functionName: 'getTroveStatus', args: [account!] },
           { ...tm, functionName: 'getEntireDebtAndColl', args: [account!] },
+          { ...tm, functionName: 'getCurrentICR', args: [account!, price] },
+          { ...tm, functionName: 'getTCR', args: [price] },
+          { ...tm, functionName: 'checkRecoveryMode', args: [price] },
+          { ...tm, functionName: 'getTroveMaxBorrowingCapacity', args: [account!] },
         ],
       })
       const [coll, principal, interest, pendingColl, pendingPrincipal, pendingInterest] = entire
@@ -733,6 +752,11 @@ export function useTrove(account: Address | undefined) {
         status: Number(status),
         coll: coll + pendingColl,
         debt: principal + interest + pendingPrincipal + pendingInterest,
+        icr,
+        price,
+        tcr,
+        recoveryMode,
+        maxBorrowingCapacity: capacity,
       }
     },
   })
