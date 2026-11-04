@@ -1,47 +1,69 @@
+import { useQuery } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { isAddressEqual, type Address } from 'viem'
-import { useReadContract } from 'wagmi'
+import { useReadContract, useSignTypedData } from 'wagmi'
+import { erc20Abi } from '../abi/erc20'
 import { ENV_CONTRACTS } from '../config'
 import { demoChain, isMezo } from '../network'
 import { leaseShareAbi } from '../abi/leaseShare'
 import { LeaseState, rentEscrowAbi } from '../abi/rentEscrow'
-import type { TerminationRow } from '../abi/rentEscrowV2'
+import { rentEscrowV2Abi, type TerminationRow } from '../abi/rentEscrowV2'
 import { SyncButton } from '../components/CredentialCard'
 import { AddressLink, Empty, NotConfigured, Notice, TxStatus } from '../components/ui'
 import {
   activeEscrowAbi,
   useAiArbiter,
   useContracts,
+  useDemoClient,
   useLeases,
+  useMezoProtocol,
   useNow,
   useRentoutsNames,
+  useTrove,
   useTx,
   useV2Extras,
   useWallet,
   type AiArbiterInfo,
   type LeaseRow,
 } from '../hooks'
+import { errorMessage } from '../lib/errors'
 import { formatCountdown, formatDuration, formatToken, parseToken, parseWhole } from '../lib/format'
-import { STATE_LABELS, leaseTiming } from '../lib/lease'
-import { MOCK_LEASE_SCREEN, MOCK_VIEWER } from '../lib/mockLease'
+import { STATE_LABELS, defaultAt, defaultSplit, isDefaultable, leaseTiming, nextDueAt } from '../lib/lease'
+import { mockLeaseScreenFor } from '../lib/mockLease'
+import { signWithdrawMusd } from '../lib/payFromTrove'
+import { walletReadQuery } from '../lib/polling'
 import { isOpenOffer, terminationSplit, terminationTermsHash, tenantSide, timeoutSplit } from '../lib/termination'
+import { TroveStatus, WITHDRAW_TARGET, withdrawQuote } from '../lib/trove'
 import { AiJudgePanel } from './AiJudgePanel'
+import { PERMISSION_HINT } from './FundPanel'
 
-// ?mockLease=1 (dev builds only): fixed sample data, so the Wave-2 lease states can be reviewed with
-// no wallet and no RPC. Production builds fold this away and drop the mock module from the bundle.
-const mockLeaseScreen = import.meta.env.DEV && new URLSearchParams(window.location.search).has('mockLease') ? MOCK_LEASE_SCREEN : undefined
+// ?mockLease=<mode> (dev builds only): fixed sample data, so the Wave-2 lease states can be reviewed
+// with no wallet and no RPC. `1` = the tenant screen; `landlord-ontime`, `landlord-grace` and
+// `landlord-due` stage the landlord's view of the monthly clock, `notrove` drops the tenant's trove.
+// Production builds fold this away and drop the mock module from the bundle.
+const mockLeaseScreen = import.meta.env.DEV
+  ? mockLeaseScreenFor(new URLSearchParams(window.location.search).get('mockLease') ?? '')
+  : undefined
 
 const same = (a: Address | undefined, b: Address | undefined) => !!a && !!b && isAddressEqual(a, b)
 
 /** The default window an early-end offer stays open for the other side to accept. */
 const TERM_DAYS_DEFAULT = 3
 
-/** One segment per period: released, unlocked (claimable) or still ahead. */
+/** One segment per period: released, unlocked (claimable), unpaid (overdue on a monthly lease) or still ahead. */
 function PeriodBar({ lease, elapsed }: { lease: LeaseRow; elapsed: number }) {
+  const funded = lease.monthly ? (lease.periodsFunded ?? 0) : lease.periods
   return (
-    <ol className="periods" aria-label={`${lease.periodsClaimed} of ${lease.periods} rent periods released`}>
+    <ol
+      className="periods"
+      aria-label={
+        lease.monthly
+          ? `${funded} of ${lease.periods} rent periods paid in, ${lease.periodsClaimed} released`
+          : `${lease.periodsClaimed} of ${lease.periods} rent periods released`
+      }
+    >
       {Array.from({ length: Math.min(lease.periods, 48) }, (_, i) => {
-        const kind = i < lease.periodsClaimed ? 'paid' : i < elapsed ? 'open' : 'ahead'
+        const kind = i < lease.periodsClaimed ? 'paid' : i < funded ? 'open' : i < elapsed ? 'unpaid' : 'ahead'
         return <li key={i} className={`period period-${kind}`} />
       })}
     </ol>
@@ -325,6 +347,252 @@ function ShareLine({ lease }: { lease: LeaseRow }) {
   )
 }
 
+/** The tenant's pay-monthly actions: mint the next period's rent from their trove, or pay it with MUSD. */
+function PayNextRent({ lease, account, overdue, fmt }: { lease: LeaseRow; account: Address; overdue: boolean; fmt: (v: bigint) => string }) {
+  const { escrow, token, tokenDecimals, tokenSymbol, borrowerOpsSignatures } = useContracts()
+  const client = useDemoClient()
+  const { signTypedDataAsync } = useSignTypedData()
+  const { ready } = useWallet()
+  const approveTx = useTx()
+  const payTx = useTx()
+  const [signing, setSigning] = useState(false)
+  const [signError, setSignError] = useState<string | null>(null)
+
+  const protocolQuery = useMezoProtocol()
+  const troveQuery = useTrove(account)
+  const { data: allowanceRead } = useReadContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: 'allowance',
+    args: [account, escrow!],
+    chainId: demoChain.id,
+    query: walletReadQuery(!!escrow),
+  })
+  const { data: balanceRead } = useReadContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: 'balanceOf',
+    args: [account],
+    chainId: demoChain.id,
+    query: walletReadQuery(!!account),
+  })
+  // ?mockLease=1 (dev only): the same fixed sample trove, protocol and wallet reads as the fund screen.
+  const protocol = mockLeaseScreen ? mockLeaseScreen.protocol : protocolQuery.data
+  const trove = mockLeaseScreen ? mockLeaseScreen.trove : troveQuery.data
+  const allowance = mockLeaseScreen ? mockLeaseScreen.allowance : allowanceRead
+  const balance = mockLeaseScreen ? mockLeaseScreen.musd : balanceRead
+  const rent = lease.rentPerPeriod
+  const funded = lease.periodsFunded ?? 0
+  const approved = allowance !== undefined && allowance >= rent
+  const enough = balance !== undefined && balance >= rent
+  const busy = approveTx.busy || payTx.busy
+  const fmtRent = `${formatToken(rent, tokenDecimals)} ${tokenSymbol}`
+
+  if (protocolQuery.isError && !mockLeaseScreen) {
+    return <Notice tone="error">Couldn’t read Mezo Borrow. The testnet RPC may be busy; this retries.</Notice>
+  }
+  if (!protocol || !trove) return <p className="hint">Reading Mezo Borrow and your trove…</p>
+
+  const fromTrove = trove.status === TroveStatus.active
+  const quote = withdrawQuote(trove, protocol, rent)
+
+  const payFromTrove = async () => {
+    if (!escrow || !borrowerOpsSignatures || quote.blocked || !fromTrove) return
+    setSignError(null)
+    try {
+      setSigning(true)
+      const { signature, deadline, upper, lower } = await signWithdrawMusd({
+        client,
+        account,
+        signatures: borrowerOpsSignatures,
+        recipient: escrow,
+        amount: rent,
+        coll: trove.coll,
+        newDebt: quote.newDebt,
+        signTypedDataAsync,
+        now: Math.floor(Date.now() / 1000),
+      })
+      setSigning(false)
+      await payTx.run(
+        {
+          address: escrow,
+          abi: rentEscrowV2Abi,
+          functionName: 'withdrawAndPayRent',
+          args: [lease.id, 1, rent, upper, lower, signature, deadline],
+        },
+        `Mint ${formatToken(rent, 18)} MUSD from the trove and pay period ${funded + 1} of lease #${lease.id}`,
+      )
+    } catch (error) {
+      setSigning(false)
+      setSignError(errorMessage(error))
+    }
+  }
+
+  /** The approve-then-pay path; secondary next to the trove button, primary when there is no trove. */
+  const musdButton = (variant: 'primary' | 'secondary') =>
+    approved ? (
+      <button
+        type="button"
+        className={variant === 'primary' ? 'btn btn-primary' : 'btn'}
+        disabled={!ready || busy || !escrow || !enough}
+        onClick={() =>
+          payTx.run(
+            { address: escrow!, abi: rentEscrowV2Abi, functionName: 'payRent', args: [lease.id, 1] },
+            `Pay period ${funded + 1} of lease #${lease.id} with MUSD`,
+          )
+        }
+      >
+        Pay with MUSD
+      </button>
+    ) : (
+      <button
+        type="button"
+        className={variant === 'primary' ? 'btn btn-primary' : 'btn'}
+        disabled={!ready || busy || !escrow}
+        onClick={() =>
+          approveTx.run({ address: token, abi: erc20Abi, functionName: 'approve', args: [escrow!, rent] }, `Approve ${fmtRent} for lease #${lease.id}`)
+        }
+      >
+        Approve {fmtRent}
+      </button>
+    )
+
+  return (
+    <div className="proposal">
+      <p className="proposal-kicker">Next payment</p>
+      <p className="proposal-split">
+        Period {funded + 1} of {lease.periods}: <strong>{fmt(rent)}</strong>
+      </p>
+      {fromTrove && quote.fits && !quote.blocked ? <p className="hint">The trove mints it; your BTC stays locked.</p> : null}
+      {fromTrove ? (
+        <>
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!ready || quote.blocked || busy || signing || !escrow || !borrowerOpsSignatures}
+              onClick={payFromTrove}
+            >
+              Pay next period from your trove
+            </button>
+          </div>
+          <p className="pay-alt">Or pay with MUSD you already have</p>
+          <div className="actions">{musdButton('secondary')}</div>
+          <p className="hint">{PERMISSION_HINT}</p>
+        </>
+      ) : (
+        <div className="actions">{musdButton('primary')}</div>
+      )}
+      {fromTrove && trove.recoveryMode ? (
+        <Notice tone="warn">
+          Mezo is in Recovery Mode, so no new debt: the trove can’t mint this payment right now. Pay with MUSD you
+          already have, or wait for the system to recover.
+        </Notice>
+      ) : fromTrove && !quote.fits ? (
+        <Notice tone="warn">
+          This trove can only carry {fmt(quote.maxMint)} more MUSD safely (it keeps {WITHDRAW_TARGET}% collateral and
+          stays inside Mezo’s borrowing cap). Add BTC in <a href="#trove">Your trove</a>, or pay with MUSD.
+        </Notice>
+      ) : null}
+      {!enough && balance !== undefined ? (
+        <p className="hint">
+          You hold {formatToken(balance, tokenDecimals)} and need {fmtRent}.
+        </p>
+      ) : null}
+      {overdue ? (
+        <p className="hint">You can still pay: the lease stays yours until the landlord claims default.</p>
+      ) : (
+        <p className="hint">Paying early is fine: the escrow books the periods and releases them on schedule.</p>
+      )}
+      {signing ? <p className="tx tx-busy">Confirm the Mezo permission in MetaMask…</p> : null}
+      {signError ? (
+        <p className="tx tx-error" role="alert">
+          {signError}
+        </p>
+      ) : null}
+      <TxStatus state={approveTx.state} done="Escrow approved to pull the exact amount." />
+      <TxStatus state={payTx.state} done={`Period ${funded + 1} of lease #${lease.id} is paid in.`} />
+    </div>
+  )
+}
+
+/** The landlord's default action on a stalled monthly lease: claim the funded rent plus one period from the deposit. */
+function ClaimDefault({ lease, now, fmt }: { lease: LeaseRow; now: number; fmt: (v: bigint) => string }) {
+  const { escrow } = useContracts()
+  const client = useDemoClient()
+  const tx = useTx()
+  const split = defaultSplit(lease)
+  const defaultable = isDefaultable(lease, now)
+  const due = nextDueAt(lease)
+  const at = defaultAt(lease)
+  // A contract landlord (the demo landlord) claims through its own contract; the split is the escrow's, but its own
+  // ledger shows it, so the numbers stay out of the card.
+  const landlordCode = useQuery({
+    queryKey: ['landlord-code', lease.landlord],
+    enabled: !!client,
+    staleTime: Infinity,
+    retry: 1,
+    // viem's getCode returns undefined (not 0x) for an account without code; normalize it for react-query.
+    queryFn: async () => (await client.getCode({ address: lease.landlord })) ?? '0x',
+  })
+  // Until the code read lands (or if it fails) neither branch is claimed: an ordinary wallet isn't called a contract.
+  const codeKnown = landlordCode.isSuccess
+  const showSplit = codeKnown && landlordCode.data === '0x'
+
+  return (
+    <div className="proposal">
+      <p className="proposal-kicker">{defaultable ? 'Claim default' : 'Next payment'}</p>
+      {defaultable ? (
+        <>
+          {!codeKnown ? (
+            <p className="hint">Checking the landlord wallet…</p>
+          ) : showSplit ? (
+            <>
+              <p className="proposal-split">
+                Landlord <strong>{fmt(split.toLandlord)}</strong> ({fmt(split.rentToLandlord)} earned rent +{' '}
+                {fmt(split.depositForfeit)} from the deposit) · tenant <strong>{fmt(split.toTenant)}</strong>
+              </p>
+              <SplitAmounts lease={lease} toLandlord={split.toLandlord} toTenant={split.toTenant} fmt={fmt} />
+              <p className="hint">
+                The fixed default split: the funded rent you never released, plus one period’s rent out of the deposit.
+                The lease closes and the tenant gets the rest of the deposit.
+              </p>
+            </>
+          ) : (
+            <p className="hint">
+              Your wallet is a contract, so no split is shown here. The escrow pays it the funded unreleased rent plus
+              one period’s rent from the deposit, and the tenant the rest of the deposit.
+            </p>
+          )}
+          <div className="actions">
+            <button
+              type="button"
+              className="btn"
+              disabled={tx.busy || !escrow}
+              onClick={() =>
+                tx.run({ address: escrow!, abi: rentEscrowV2Abi, functionName: 'claimDefault', args: [lease.id] }, `Claim default on lease #${lease.id}`)
+              }
+            >
+              Claim default
+            </button>
+          </div>
+        </>
+      ) : at !== null && due !== null && now >= due ? (
+        <p className="hint">
+          Payment overdue: if nothing is paid, you can claim default in {formatCountdown(at - now)}.
+        </p>
+      ) : due !== null ? (
+        <p className="hint">
+          Due in {formatCountdown(due - now)}. If it stays unpaid for a full period after that, you can claim default.
+        </p>
+      ) : (
+        <p className="hint">Reading the payment clock…</p>
+      )}
+      <TxStatus state={tx.state} done="Lease closed by default: the funded rent and the deposit split were paid out." />
+    </div>
+  )
+}
+
 /** `judge`: the AIArbiter of this escrow (useAiArbiter().judge), or undefined when there is none or it has a problem. */
 function LeaseCard({
   lease,
@@ -358,7 +626,18 @@ function LeaseCard({
   const call = (functionName: keyof typeof verbs) =>
     tx.run({ address: escrow!, abi: activeEscrowAbi, functionName, args: [lease.id] }, `${verbs[functionName]} lease #${lease.id}`)
 
-  const canClose = active && !!timing?.ended && (isLandlord || now >= timing.publicCloseAt)
+  // The pay-monthly clock: the next unfunded period falls due at startTime + periodsFunded * periodSeconds,
+  // and one full period later the landlord can claim default.
+  const funded = lease.periodsFunded ?? lease.periods
+  const underfunded = lease.monthly === true && funded < lease.periods
+  const monthlyDue = active && underfunded ? nextDueAt(lease) : null
+  const monthlyDefaultAt = active && underfunded ? defaultAt(lease) : null
+  const overdue = monthlyDue !== null && now >= monthlyDue
+  const monthlySplit = underfunded ? defaultSplit(lease) : null
+  // Periods whose due time has passed with nothing paid on them (the red segments on the bar).
+  const overduePeriods = underfunded && timing ? Math.max(0, Math.min(timing.elapsed, lease.periods) - funded) : 0
+
+  const canClose = active && !!timing?.ended && !underfunded && (isLandlord || now >= timing.publicCloseAt)
   const role = isLandlord
     ? 'You’re the landlord'
     : isTenant
@@ -378,10 +657,14 @@ function LeaseCard({
 
   let clock: string | null = null
   if (lease.state === LeaseState.CREATED) clock = 'Waiting for the tenant to fund it.'
-  else if (active && timing?.nextUnlock) clock = `Next rent unlocks in ${formatCountdown(timing.nextUnlock - now)}.`
+  else if (active && monthlyDue !== null) {
+    // A monthly lease with periods left to fund: the payment clock replaces the unlock clock.
+    clock = overdue ? null : `Next payment due in ${formatCountdown(monthlyDue - now)}.`
+  } else if (active && timing?.nextUnlock) clock = `Next rent unlocks in ${formatCountdown(timing.nextUnlock - now)}.`
   else if (active && timing?.ended) {
-    clock =
-      now >= timing.publicCloseAt || isLandlord
+    clock = underfunded
+      ? 'Term over: the lease closes once every period is paid in — or by a default claim.'
+      : now >= timing.publicCloseAt || isLandlord
         ? 'Term over. The lease can be closed.'
         : `Term over. The landlord can close it now; anyone can in ${formatCountdown(timing.publicCloseAt - now)}.`
   } else if (lease.state === LeaseState.DISPUTED) {
@@ -402,6 +685,7 @@ function LeaseCard({
       <div className="lease-head">
         <h3>Lease #{String(lease.id)}</h3>
         <span className={`state state-${lease.state}`}>{STATE_LABELS[lease.state] ?? 'Unknown'}</span>
+        {lease.monthly ? <span className="badge badge-monthly">Monthly</span> : null}
         {role ? <span className="role">{role}</span> : null}
       </div>
 
@@ -444,11 +728,33 @@ function LeaseCard({
         <div className="lease-progress">
           <PeriodBar lease={lease} elapsed={timing.elapsed} />
           <p className="hint">
-            {lease.periodsClaimed} of {lease.periods} period{lease.periods === 1 ? '' : 's'} released to the landlord.
+            {lease.monthly
+              ? `${funded} of ${lease.periods} periods paid${lease.periodsClaimed > 0 ? ` · ${lease.periodsClaimed} released` : ''}${overduePeriods > 0 ? ` · ${overduePeriods} overdue` : ''}`
+              : `${lease.periodsClaimed} of ${lease.periods} period${lease.periods === 1 ? '' : 's'} released to the landlord.`}
           </p>
         </div>
       ) : null}
       {clock ? <p className="clock">{clock}</p> : null}
+      {overdue && monthlyDefaultAt !== null && monthlySplit ? (
+        now >= monthlyDefaultAt ? (
+          <Notice tone="error">
+            <strong>Payment overdue.</strong> The grace period is over: the landlord can claim default now and keep{' '}
+            {fmt(monthlySplit.depositForfeit)} of the deposit.
+          </Notice>
+        ) : (
+          <Notice tone="warn">
+            <strong>Payment overdue.</strong> If nothing is paid within {formatCountdown(monthlyDefaultAt - now)}, the
+            landlord can claim default and keep {fmt(monthlySplit.depositForfeit)} of the deposit.
+          </Notice>
+        )
+      ) : null}
+
+      {isMezo && active && underfunded ? (
+        <>
+          {isTenant && account ? <PayNextRent lease={lease} account={account} overdue={overdue} fmt={fmt} /> : null}
+          {isLandlord ? <ClaimDefault lease={lease} now={now} fmt={fmt} /> : null}
+        </>
+      ) : null}
 
       <div className="actions">
         {active ? (
@@ -592,9 +898,9 @@ export function LeasesPanel() {
   const leases = useLeases(escrow)
   const [showAll, setShowAll] = useState(false)
 
-  // ?mockLease=1 (dev only): fixed sample data stands in for the wallet and the leases.
+  // ?mockLease=<mode> (dev only): fixed sample data stands in for the wallet and the leases.
   const mock = mockLeaseScreen
-  const address = mock ? MOCK_VIEWER : wallet.address
+  const address = mock ? mock.viewer : wallet.address
 
   const all = mock ? mock.leases : (leases.data ?? [])
   const extras = useV2Extras(escrow, all.map((l) => l.id))

@@ -961,6 +961,9 @@ input[type='range'] {
 .period-open {
   background: var(--warm-fill);
 }
+.period-unpaid {
+  background: var(--danger);
+}
 .clock {
   font-variant-numeric: tabular-nums;
   font-weight: 550;
@@ -1067,6 +1070,10 @@ input[type='range'] {
   background: var(--primary-soft);
 }
 .badge-human-resolved {
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.badge-monthly {
   color: var(--text);
   box-shadow: inset 0 0 0 1px var(--line-strong);
 }
