@@ -5,8 +5,10 @@ export const SEPOLIA_CHAIN_ID = 11_155_111
 /**
  * What the app takes from the repo-root deployments.json. script/DeployEscrow.s.sol writes the "sepolia" entry
  * (rentEscrow, leaseShare1155, humanGate, token, arbiter); script/DeployAIArbiter.s.sol writes
- * "sepoliaAIArbiter" (aiArbiter, human, agent, challengeWindow, fromBlock). Every field is optional: a missing
- * file, entry or key just means "not deployed".
+ * "sepoliaAIArbiter" (aiArbiter, human, agent, challengeWindow, fromBlock); script/DeployEscrowV2.s.sol
+ * writes "mezoTestnetV2" (rentEscrowV2, leaseShare1155, humanGate, token, arbiter,
+ * borrowerOpsSignatures, disputeTimeout). Every field is optional: a missing file, entry or key just
+ * means "not deployed".
  */
 export type Deployments = {
   rentEscrow?: Address
@@ -19,6 +21,10 @@ export type Deployments = {
   aiFromBlock?: bigint
   /** DemoLandlord (Mezo): lets one wallet request a lease as tenant. */
   demoLandlord?: Address
+  /** Wave-2 (the "mezoTestnetV2" entry): Mezo's BorrowerOperationsSignatures relayed by borrowAndFund / withdrawAndFund. */
+  borrowerOpsSignatures?: Address
+  /** Wave-2 (the "mezoTestnetV2" entry): seconds a dispute stays open before anyone may settle it by timeout. */
+  disputeTimeout?: number
 }
 
 /** A non-zero address, checksummed; anything else (missing, malformed, zero) is undefined. */
@@ -47,18 +53,29 @@ function asBlock(value: unknown): bigint | undefined {
   return undefined
 }
 
+/** Whole seconds (the dispute timeout); anything else is "not recorded". */
+function asSeconds(value: unknown): number | undefined {
+  const block = asBlock(value)
+  return block !== undefined && block <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(block) : undefined
+}
+
 /**
  * Reads one core entry plus, on Sepolia, "sepoliaAIArbiter". Never throws.
- * Pass `{ key: 'mezoTestnet', chainId: 31611 }` for the Mezo deploy. Default is the Tokyo Sepolia record.
+ * Pass `{ key: 'mezoTestnetV2', chainId: 31611, v2: true }` for the Mezo Wave-2 deploy: its escrow sits
+ * under `rentEscrowV2` and the entry also carries borrowerOpsSignatures / disputeTimeout. Default is the
+ * Tokyo Sepolia record.
  */
-export function parseDeployments(raw: unknown, selector?: { key: string; chainId: number }): Deployments {
+export function parseDeployments(
+  raw: unknown,
+  selector?: { key: string; chainId: number; v2?: boolean },
+): Deployments {
   const root = asRecord(raw)
   const key = selector?.key ?? 'sepolia'
   const chainId = selector?.chainId ?? SEPOLIA_CHAIN_ID
   const core = entryOn(root?.[key], chainId)
   const ai = selector ? undefined : entryOn(root?.sepoliaAIArbiter, SEPOLIA_CHAIN_ID)
   return {
-    rentEscrow: asAddress(core?.rentEscrow),
+    rentEscrow: selector?.v2 ? asAddress(core?.rentEscrowV2) : asAddress(core?.rentEscrow),
     leaseShare1155: asAddress(core?.leaseShare1155),
     humanGate: asAddress(core?.humanGate),
     token: asAddress(core?.token),
@@ -66,6 +83,8 @@ export function parseDeployments(raw: unknown, selector?: { key: string; chainId
     aiArbiter: asAddress(ai?.aiArbiter),
     aiFromBlock: ai ? asBlock(ai.fromBlock) : undefined,
     demoLandlord: asAddress(core?.demoLandlord),
+    borrowerOpsSignatures: selector?.v2 ? asAddress(core?.borrowerOpsSignatures) : undefined,
+    disputeTimeout: selector?.v2 ? asSeconds(core?.disputeTimeout) : undefined,
   }
 }
 

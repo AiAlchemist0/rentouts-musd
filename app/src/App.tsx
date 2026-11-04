@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { getAddress, isAddressEqual, type Address } from 'viem'
 import { Header, NetworkGuard } from './components/Header'
 import { AddressLink, ExtLink } from './components/ui'
-import { DEMO_LANDLORD, ENS } from './config'
+import { DEMO_LANDLORD, ENS, ENV_CONTRACTS } from './config'
 import { MEZO_BORROW } from './abi/mezo'
 import { explorerLabel, isMezo } from './network'
 import { useAiArbiter, useContracts, useHumanGate } from './hooks'
@@ -100,7 +100,7 @@ function RecentTxs() {
 }
 
 function Footer() {
-  const { escrow, token, leaseShare, credentialSync, arbiter, humanGate, tokenSymbol } = useContracts()
+  const { escrow, token, leaseShare, credentialSync, arbiter, humanGate, borrowerOpsSignatures, tokenSymbol } = useContracts()
   const { info: ai } = useAiArbiter()
   const gate = useHumanGate(undefined)
   const gateNote =
@@ -115,7 +115,8 @@ function Footer() {
       <div className="wrap">
         <h2>{isMezo ? 'Contracts on Mezo testnet' : 'Contracts on Ethereum Sepolia'}</h2>
         <dl className="contracts">
-          <ContractRow name="RentEscrow" address={escrow} />
+          {/* Wave-2: the app runs on RentEscrowV2; the first deploy's contracts stay listed as V1. */}
+          <ContractRow name={isMezo ? 'RentEscrowV2' : 'RentEscrow'} address={escrow} note={isMezo ? '(leases, funding, early end, disputes)' : undefined} />
           <ContractRow name={`Token (${tokenSymbol})`} address={token} />
           <ContractRow
             name={arbiterIsAi ? 'Arbiter (AIArbiter)' : 'Arbiter'}
@@ -125,14 +126,19 @@ function Footer() {
           {ai && !arbiterIsAi ? <ContractRow name="AIArbiter" address={ai.address} note="(AI judge contract with a human arbiter)" /> : null}
           {ai ? <ContractRow name="Human arbiter" address={ai.human} note="(can override the AI until a ruling executes)" /> : null}
           {ai ? <ContractRow name="AI judge key" address={ai.agent} note={ai.agent ? '(can only propose)' : '(AI proposals off)'} /> : null}
-          {humanGate ? <ContractRow name="HumanGate" address={humanGate} note={gateNote} /> : null}
+          {humanGate ? <ContractRow name={isMezo ? 'HumanGate (V2)' : 'HumanGate'} address={humanGate} note={gateNote} /> : null}
           {gate.verifier ? (
             <ContractRow name="World ID gate" address={gate.verifier} note="(HumanGate.verifier(): only wallets registered with a World ID 4.0 proof can fund)" />
           ) : null}
-          <ContractRow name="LeaseShare1155" address={leaseShare} />
+          <ContractRow name={isMezo ? 'LeaseShare1155 (V2)' : 'LeaseShare1155'} address={leaseShare} />
+          {isMezo ? (
+            <ContractRow name="BorrowerOperationsSignatures" address={borrowerOpsSignatures} note="(the permission borrow-and-pay signs: a message, no gas)" />
+          ) : null}
           {isMezo && DEMO_LANDLORD ? <ContractRow name="DemoLandlord" address={DEMO_LANDLORD} note="(rent from it with one wallet)" /> : null}
           {isMezo ? <ContractRow name="Mezo BorrowerOperations" address={MEZO_BORROW.borrowerOperations} note="(openTrove / withdrawMUSD)" /> : null}
           {isMezo ? <ContractRow name="Mezo PriceFeed" address={getAddress(MEZO_BORROW.priceFeed)} /> : null}
+          {isMezo && ENV_CONTRACTS.escrowV1 ? <ContractRow name="RentEscrow (V1)" address={ENV_CONTRACTS.escrowV1} note="(the app’s first escrow; its leases still pay out there)" /> : null}
+          {isMezo && ENV_CONTRACTS.leaseShareV1 ? <ContractRow name="LeaseShare1155 (V1)" address={ENV_CONTRACTS.leaseShareV1} /> : null}
           {isMezo ? null : (
             <>
               <ContractRow name="CredentialSync" address={credentialSync} />

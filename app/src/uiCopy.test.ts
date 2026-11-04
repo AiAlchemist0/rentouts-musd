@@ -14,4 +14,11 @@ describe('UI copy', () => {
     const quotedAcronym = /(['"`])[^'"`]*\b(?:ICR|TCR|NICR)\b[^'"`]*\1/
     for (const [file, text] of Object.entries(sources)) expect(text, file).not.toMatch(quotedAcronym)
   })
+
+  it('calls the Wave-2 signing flow a permission, not a cryptography term', () => {
+    // "You sign a Mezo permission — a message, no gas" stays plain English; the EIP-712/keccak
+    // words belong in code and tests, never in a quoted string a panel renders.
+    const quotedJargon = /(['"`])[^'"`]*\b(?:EIP-712|keccak|gasless|relayer|relays)\b[^'"`]*\1/
+    for (const [file, text] of Object.entries(sources)) expect(text, file).not.toMatch(quotedJargon)
+  })
 })

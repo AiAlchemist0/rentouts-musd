@@ -29,12 +29,19 @@ export type LeaseTiming = {
   publicCloseAt: number
 }
 
+/** Whole periods elapsed at `at`, capped at the term. Mirrors the escrow's _elapsedPeriods. */
+export function elapsedPeriods(terms: Pick<LeaseTerms, 'startTime' | 'periodSeconds' | 'periods'>, at: number): number {
+  const start = Number(terms.startTime)
+  if (start === 0 || terms.periodSeconds <= 0) return 0
+  return Math.min(terms.periods, Math.max(0, Math.floor((at - start) / terms.periodSeconds)))
+}
+
 /** Mirrors the escrow's period arithmetic for display. Returns null before the lease is funded. */
 export function leaseTiming(terms: LeaseTerms, now: number): LeaseTiming | null {
   const start = Number(terms.startTime)
   if (start === 0 || terms.periodSeconds <= 0) return null
   const end = start + terms.periods * terms.periodSeconds
-  const elapsed = Math.min(terms.periods, Math.max(0, Math.floor((now - start) / terms.periodSeconds)))
+  const elapsed = elapsedPeriods(terms, now)
   const nextUnlock = elapsed >= terms.periods ? null : start + (elapsed + 1) * terms.periodSeconds
   return { end, elapsed, nextUnlock, ended: now >= end, publicCloseAt: end + terms.periodSeconds }
 }

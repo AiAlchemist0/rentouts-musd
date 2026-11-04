@@ -137,6 +137,73 @@ describe('mezoTestnet entry', () => {
   })
 })
 
+describe('mezoTestnetV2 entry (the Wave-2 deploy)', () => {
+  const musd = '0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503'
+  const signatures = '0xD757e3646AF370b15f32EB557F0F8380Df7D639e'
+  const escrowV2 = '0xdD4A5747d336Bb6653a5430d87CdaAc89dd9113e'
+  const arbiter = '0x1da334A5FaB59a741fDAE7f081c7f592027b3106'
+  const raw = {
+    ...file,
+    mezoTestnet: {
+      chainId: MEZO_CHAIN_ID,
+      rentEscrow: file.sepolia.rentEscrow,
+      demoLandlord: '0x6621de90776302ad1a3c0190141f9169b4a0112b',
+    },
+    mezoTestnetV2: {
+      chainId: MEZO_CHAIN_ID,
+      rentEscrowV2: escrowV2,
+      token: musd.toLowerCase(),
+      arbiter: arbiter.toLowerCase(),
+      borrowerOpsSignatures: signatures.toLowerCase(),
+      disputeTimeout: 600,
+      leaseShare1155: file.sepolia.leaseShare1155,
+    },
+  }
+
+  it('with v2: true reads the escrow under rentEscrowV2 plus the Wave-2 fields', () => {
+    const parsed = parseDeployments(raw, { key: 'mezoTestnetV2', chainId: MEZO_CHAIN_ID, v2: true })
+    expect(parsed.rentEscrow).toBe(escrowV2)
+    expect(parsed.token).toBe(musd)
+    expect(parsed.arbiter).toBe(arbiter)
+    expect(parsed.borrowerOpsSignatures).toBe(signatures)
+    expect(parsed.disputeTimeout).toBe(600)
+    // The V1 demo landlord is not the V2 entry's, so it must not leak into the active parse.
+    expect(parsed.demoLandlord).toBeUndefined()
+  })
+
+  it('without v2 the entry keeps rentEscrowV2 apart from rentEscrow (and reads no Wave-2 fields)', () => {
+    const parsed = parseDeployments(raw, { key: 'mezoTestnetV2', chainId: MEZO_CHAIN_ID })
+    expect(parsed.rentEscrow).toBeUndefined()
+    expect(parsed.borrowerOpsSignatures).toBeUndefined()
+    expect(parsed.disputeTimeout).toBeUndefined()
+  })
+
+  it('degrades when the Wave-2 fields are missing or malformed', () => {
+    const thin = parseDeployments(
+      { mezoTestnetV2: { chainId: MEZO_CHAIN_ID, rentEscrowV2: escrowV2 } },
+      { key: 'mezoTestnetV2', chainId: MEZO_CHAIN_ID, v2: true },
+    )
+    expect(thin.rentEscrow).toBe(escrowV2)
+    expect(thin.borrowerOpsSignatures).toBeUndefined()
+    expect(thin.disputeTimeout).toBeUndefined()
+
+    const malformed = parseDeployments(
+      { mezoTestnetV2: { chainId: MEZO_CHAIN_ID, rentEscrowV2: 'nope', disputeTimeout: -5 } },
+      { key: 'mezoTestnetV2', chainId: MEZO_CHAIN_ID, v2: true },
+    )
+    expect(malformed.rentEscrow).toBeUndefined()
+    expect(malformed.disputeTimeout).toBeUndefined()
+  })
+
+  it('ignores a V2 entry recorded for another chain', () => {
+    const other = parseDeployments(
+      { mezoTestnetV2: { ...raw.mezoTestnetV2, chainId: 31_612 } },
+      { key: 'mezoTestnetV2', chainId: MEZO_CHAIN_ID, v2: true },
+    )
+    expect(other.rentEscrow).toBeUndefined()
+  })
+})
+
 describe('MUSD abi', () => {
   it('includes the ERC-20 calls the checkout makes', () => {
     const names = musdAbi.flatMap((item) => (item.type === 'function' && item.name ? [item.name] : []))

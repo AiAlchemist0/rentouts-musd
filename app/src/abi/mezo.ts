@@ -50,3 +50,10 @@ export const sortedTrovesAbi = parseAbi([
 ])
 
 export const priceFeedAbi = parseAbi(['function fetchPrice() view returns (uint256)'])
+
+/**
+ * Mezo's BorrowerOperationsSignatures (testnet 0xD757…639e): relays a tenant-signed EIP-712 trove
+ * operation. Only the nonce read lives here — the app signs the messages itself (lib/mezoSignatures)
+ * and RentEscrowV2 relays the operation in borrowAndFund / withdrawAndFund.
+ */
+export const borrowerOperationsSignaturesAbi = parseAbi(['function getNonce(address user) view returns (uint256)'])
