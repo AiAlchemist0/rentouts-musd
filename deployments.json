@@ -44,6 +44,7 @@
     "humanGate": "0x00dBe18F1c6Db528006f9b1f34dD7175b3a40015",
     "leaseShare1155": "0x3AB4362aA7DCB062CA03791730f1641ca1898dE6",
     "rentEscrowV2": "0xdD4A5747d336Bb6653a5430d87CdaAc89dd9113e",
-    "token": "0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503"
+    "token": "0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503",
+    "verified": "sourcify exact_match (RentEscrowV2, LeaseShare1155, HumanGate)"
   }
 }
