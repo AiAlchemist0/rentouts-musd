@@ -11,6 +11,8 @@ export const MEZO_BORROW = {
   hintHelpers: '0x4e4cBA3779d56386ED43631b4dCD6d8EacEcBCF6',
   sortedTroves: '0x722e4d24fd6ff8b0ac679450f3d91294607268fa',
   priceFeed: '0x86bcf0841622a5dac14a313a15f96a95421b9366',
+  // Where a redeemed trove's leftover BTC waits until the owner calls claimCollateral().
+  collSurplusPool: '0xB4C35747c26E4aB5F1a7CdC7E875B5946eFa6fa9',
 } as const
 
 export const borrowerOperationsAbi = parseAbi([
@@ -27,6 +29,8 @@ export const borrowerOperationsAbi = parseAbi([
   'function CCR() view returns (uint256)',
   'function MUSD_GAS_COMPENSATION() view returns (uint256)',
   'function borrowingRate() view returns (uint256)',
+  // Brings back any BTC the CollSurplusPool is holding for the caller (a redemption that closed the trove).
+  'function claimCollateral()',
 ])
 
 export const troveManagerAbi = parseAbi([
@@ -38,6 +42,11 @@ export const troveManagerAbi = parseAbi([
   'function checkRecoveryMode(uint256 _price) view returns (bool)',
   'function getTroveMaxBorrowingCapacity(address _borrower) view returns (uint256)',
   'function getTroveDebt(address _borrower) view returns (uint256)',
+  // The redemption queue: every open trove's owner (the array only holds open troves), plus each one's
+  // nominal ratio (the sorted-list order, coll / principal) for where a redemption would reach it next.
+  'function getTroveOwnersCount() view returns (uint256)',
+  'function getTroveFromTroveOwnersArray(uint256 _index) view returns (address)',
+  'function getNominalICR(address _borrower) view returns (uint256)',
 ])
 
 export const hintHelpersAbi = parseAbi([
@@ -50,6 +59,8 @@ export const sortedTrovesAbi = parseAbi([
 ])
 
 export const priceFeedAbi = parseAbi(['function fetchPrice() view returns (uint256)'])
+
+export const collSurplusPoolAbi = parseAbi(['function getCollateral(address _account) view returns (uint256)'])
 
 /**
  * Mezo's BorrowerOperationsSignatures (testnet 0xD757…639e): relays a tenant-signed EIP-712 trove

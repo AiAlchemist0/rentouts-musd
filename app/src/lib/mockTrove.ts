@@ -1,5 +1,5 @@
 import type { MezoProtocol, Trove } from '../hooks'
-import { ONE } from './trove'
+import { ONE, type RedemptionQueue } from './trove'
 
 /**
  * Dev-only sample data for `?mockTrove=1`: lets the "Your trove" panel render with no wallet and no RPC.
@@ -39,3 +39,28 @@ export const MOCK_MUSD_BALANCE = 4_000n * ONE
 
 /** BTC in the wallet for the mock: what Mezo's faucet sends. */
 export const MOCK_BTC_BALANCE = 50_000_000_000_000_000n
+
+/**
+ * Sample redemption-queue position for `?mockTrove=1`: 4th of 366 troves, close enough to the front to
+ * exercise the warn tone (rank 10 or less) and the "MUSD ahead" figure.
+ */
+export const MOCK_QUEUE: RedemptionQueue = { rank: 4, total: 366, debtAhead: 9_500n * ONE }
+
+/**
+ * The `?mockTrove=redeemed` picture: a trove a redemption closed outright (status 4). The debt is gone,
+ * the wallet never saw the BTC, and 0.0045 BTC waits in the CollSurplusPool for the claim button.
+ */
+export const MOCK_REDEEMED_TROVE: Trove = {
+  status: 4, // closedByRedemption
+  coll: 0n,
+  debt: 0n,
+  // With no debt left, the ratio reads as the max uint.
+  icr: 2n ** 256n - 1n,
+  price: 80_000n * ONE,
+  tcr: 1_420_000_000_000_000_000n, // 142%
+  recoveryMode: true,
+  maxBorrowingCapacity: 0n,
+}
+
+/** Leftover BTC from the mock redemption, waiting to be claimed. */
+export const MOCK_SURPLUS = 4_500_000_000_000_000n // 0.0045 BTC

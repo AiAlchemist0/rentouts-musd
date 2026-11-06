@@ -4,7 +4,19 @@ import { useBalance, useReadContract } from 'wagmi'
 import { borrowerOperationsAbi, MEZO_BORROW } from '../abi/mezo'
 import { erc20Abi } from '../abi/erc20'
 import { Empty, ExtLink, Field, Notice, TxStatus } from '../components/ui'
-import { troveHints, useContracts, useDemoClient, useMezoProtocol, useTrove, useTx, useWallet, type MezoProtocol, type Trove } from '../hooks'
+import {
+  troveHints,
+  useCollSurplus,
+  useContracts,
+  useDemoClient,
+  useMezoProtocol,
+  useRedemptionQueue,
+  useTrove,
+  useTx,
+  useWallet,
+  type MezoProtocol,
+  type Trove,
+} from '../hooks'
 import { formatRounded, formatToken, parseToken } from '../lib/format'
 import { walletReadQuery } from '../lib/polling'
 import {
@@ -18,24 +30,55 @@ import {
   riskLevel,
   TroveStatus,
   withdrawableColl,
+  type RedemptionQueue,
   type RiskLevel,
 } from '../lib/trove'
 import { demoChain } from '../network'
 import { GAS_KEEP, formatBtc, formatUsd } from './BorrowPanel'
-import { MOCK_BTC_BALANCE, MOCK_MUSD_BALANCE, MOCK_PROTOCOL, MOCK_TROVE } from '../lib/mockTrove'
+import {
+  MOCK_BTC_BALANCE,
+  MOCK_MUSD_BALANCE,
+  MOCK_PROTOCOL,
+  MOCK_QUEUE,
+  MOCK_REDEEMED_TROVE,
+  MOCK_SURPLUS,
+  MOCK_TROVE,
+} from '../lib/mockTrove'
 
 /** The ratio this app aims at when it suggests a borrow; withdrawals never plan below 150%. */
 const SAFE_TARGET = 160
 const WITHDRAW_FLOOR = 150
 
-/** Sample data substituted for every chain read when the dev build is opened with ?mockTrove=1. */
-type MockTroveData = { protocol: MezoProtocol; trove: Trove; btc: bigint; musd: bigint }
+/** At or inside this many troves from the front of the redemption queue the position is worth a warning. */
+const QUEUE_WARN_RANK = 10
+
+/**
+ * Sample data substituted for every chain read when the dev build is opened with ?mockTrove=1 (an active
+ * trove in the queue) or ?mockTrove=redeemed (closed by a redemption, BTC left to claim).
+ */
+type MockTroveData = {
+  protocol: MezoProtocol
+  trove: Trove
+  btc: bigint
+  musd: bigint
+  queue?: RedemptionQueue
+  surplus?: bigint
+}
 
 // The check sits at module level so production builds (DEV statically false) fold the branch away and
 // tree-shake the mock module: there, override stays undefined and the panel shows on-chain state only.
+const mockTroveParam = import.meta.env.DEV ? new URLSearchParams(window.location.search).get('mockTrove') : null
 let mockTroveData: MockTroveData | undefined
-if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('mockTrove')) {
-  mockTroveData = { protocol: MOCK_PROTOCOL, trove: MOCK_TROVE, btc: MOCK_BTC_BALANCE, musd: MOCK_MUSD_BALANCE }
+if (mockTroveParam === 'redeemed') {
+  mockTroveData = { protocol: MOCK_PROTOCOL, trove: MOCK_REDEEMED_TROVE, btc: MOCK_BTC_BALANCE, musd: 0n, surplus: MOCK_SURPLUS }
+} else if (mockTroveParam !== null) {
+  mockTroveData = {
+    protocol: MOCK_PROTOCOL,
+    trove: MOCK_TROVE,
+    btc: MOCK_BTC_BALANCE,
+    musd: MOCK_MUSD_BALANCE,
+    queue: MOCK_QUEUE,
+  }
 }
 
 const RISK_TONE: Record<RiskLevel, 'ok' | 'warn' | 'bad'> = { safe: 'ok', watch: 'warn', danger: 'bad' }
@@ -52,7 +95,25 @@ function dropBeforeLiquidation(trove: Trove, mcr: bigint): number {
   return Number(((trove.price - liquidation) * 1000n) / trove.price) / 10
 }
 
-function Summary({ protocol, trove }: { protocol: MezoProtocol; trove: Trove }) {
+/** What the Summary needs for the redemption-queue row: the position once read, plus how the read is going. */
+type QueueView = { position?: RedemptionQueue; reading: boolean; failed: boolean }
+
+function QueueValue({ queue, mcr }: { queue: QueueView; mcr: bigint }) {
+  if (queue.reading) return <dd>checking…</dd>
+  if (queue.failed) return <dd>unavailable</dd>
+  const { position } = queue
+  if (!position) return <dd>not while under {ratioPercent(mcr)}% collateral</dd>
+  return (
+    <dd>
+      <span className={position.rank <= QUEUE_WARN_RANK ? 'ratio ratio-warn' : undefined}>
+        #{position.rank} of {position.total}
+      </span>{' '}
+      · {formatRounded(position.debtAhead, 18)} MUSD ahead of you
+    </dd>
+  )
+}
+
+function Summary({ protocol, trove, queue }: { protocol: MezoProtocol; trove: Trove; queue: QueueView }) {
   const ratioRoom = headroom(trove.coll, trove.debt, protocol.price, percentRatio(SAFE_TARGET))
   const capacityLeft = trove.maxBorrowingCapacity > trove.debt ? trove.maxBorrowingCapacity - trove.debt : 0n
   // Mezo refuses any new borrowing in Recovery Mode (it would lower the trove's ratio).
@@ -91,6 +152,10 @@ function Summary({ protocol, trove }: { protocol: MezoProtocol; trove: Trove }) 
           <dt>Can still borrow</dt>
           <dd>{room > 0n ? `${formatRounded(room, 18)} MUSD` : 'nothing right now'}</dd>
         </div>
+        <div>
+          <dt>Redemption queue</dt>
+          <QueueValue queue={queue} mcr={protocol.mcr} />
+        </div>
       </dl>
       <p className="hint">
         {trove.recoveryMode
@@ -98,6 +163,11 @@ function Summary({ protocol, trove }: { protocol: MezoProtocol; trove: Trove }) 
           : capped
           ? `Mezo caps this trove’s total debt at ${formatRounded(trove.maxBorrowingCapacity, 18)} MUSD (recorded when you opened it), and that cap — not the ratio — is the limit now.`
           : `Keeps the trove at ${SAFE_TARGET}% or better, the lowest ratio this app suggests.`}
+      </p>
+      <p className="hint">
+        When someone swaps MUSD for BTC, Mezo repays the troves with the lowest ratio first, taking debt and BTC of equal
+        value. Near the {formatRounded(protocol.minNetDebt, 18)} MUSD minimum a trove is closed outright and the BTC left
+        over waits here for you to claim. Adding BTC moves you further back in the line.
       </p>
     </div>
   )
@@ -377,12 +447,43 @@ function CloseForm({ protocol, trove, musd, ready }: { protocol: MezoProtocol; t
   )
 }
 
+/** Leftover BTC a redemption parked in Mezo's CollSurplusPool, claimable whatever the trove's state is now. */
+function ClaimSurplus({ amount, ready }: { amount: bigint; ready: boolean }) {
+  const tx = useTx()
+  return (
+    <div className="stack">
+      <Notice tone="ok">
+        <strong>{formatBtc(amount)} BTC is waiting from a redemption.</strong> Mezo repaid this debt with someone else’s
+        MUSD and held the BTC back: it only reaches your wallet when you claim it.
+        <div className="actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!ready || tx.busy}
+            onClick={() =>
+              tx.run(
+                { address: MEZO_BORROW.borrowerOperations, abi: borrowerOperationsAbi, functionName: 'claimCollateral', args: [] },
+                `Claim ${formatBtc(amount)} BTC left over from a redemption`,
+              )
+            }
+          >
+            Claim {formatBtc(amount)} BTC
+          </button>
+          {!ready ? <span className="hint">Connect a wallet on Mezo testnet.</span> : null}
+        </div>
+      </Notice>
+      <TxStatus state={tx.state} done="The BTC is back in your wallet." />
+    </div>
+  )
+}
+
 /** One-line note for a trove that isn't active any more (or never was). */
 const CLOSED_COPY: Record<number, string> = {
   [TroveStatus.nonExistent]: 'You haven’t opened a trove yet.',
   [TroveStatus.closedByOwner]: 'Your trove is closed: all the BTC came back to your wallet.',
   [TroveStatus.closedByLiquidation]: 'This trove was liquidated: its BTC was sold to cover the debt.',
-  [TroveStatus.closedByRedemption]: 'This trove was closed by redemption: another MUSD holder repaid the debt and the BTC came back.',
+  [TroveStatus.closedByRedemption]:
+    'This trove was closed by redemption: someone swapped MUSD for BTC, which repaid this debt. Any BTC left over waits here for you to claim.',
 }
 
 export function TrovePanel() {
@@ -400,7 +501,8 @@ export function TrovePanel() {
     query: walletReadQuery(!!address),
   })
 
-  // ?mockTrove=1 (dev builds only): fixed sample data, so the panel can be reviewed with no wallet and no RPC.
+  // ?mockTrove=1 / ?mockTrove=redeemed (dev builds only): fixed sample data, so the panel can be reviewed
+  // with no wallet and no RPC.
   const mock = mockTroveData
   const protocol = mock ? mock.protocol : protocolQuery.data
   const trove = mock ? mock.trove : troveQuery.data
@@ -408,6 +510,14 @@ export function TrovePanel() {
   const walletMusd = mock ? mock.musd : musd
 
   const active = trove?.status === TroveStatus.active
+  const queueQuery = useRedemptionQueue(address, active && !mock)
+  const queue: QueueView = mock
+    ? { position: mock.queue, reading: false, failed: false }
+    : { position: queueQuery.data, reading: queueQuery.isPending, failed: queueQuery.isError }
+  // Leftover BTC from a redemption is claimable whatever the trove's state is, so this is read for any status.
+  const surplusQuery = useCollSurplus(address)
+  const surplus = mock ? mock.surplus : surplusQuery.data
+
   const risk = protocol && trove && active ? riskLevel(trove.icr, protocol.ccr, trove.recoveryMode) : 'safe'
 
   return (
@@ -449,7 +559,7 @@ export function TrovePanel() {
             </Notice>
           ) : null}
 
-          <Summary protocol={protocol} trove={trove} />
+          <Summary protocol={protocol} trove={trove} queue={queue} />
 
           <AddCollForm protocol={protocol} trove={trove} btc={walletBtc} ready={ready} />
           <RepayForm protocol={protocol} trove={trove} musd={walletMusd} ready={ready} />
@@ -457,6 +567,8 @@ export function TrovePanel() {
           <CloseForm protocol={protocol} trove={trove} musd={walletMusd} ready={ready} />
         </>
       )}
+
+      {surplus !== undefined && surplus > 0n ? <ClaimSurplus amount={surplus} ready={ready} /> : null}
     </div>
   )
 }

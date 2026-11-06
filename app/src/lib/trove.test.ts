@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { Address } from 'viem'
 import {
   bestRatioFor,
   borrowHeadroom,
@@ -13,10 +14,12 @@ import {
   ONE,
   percentRatio,
   ratioPercent,
+  redemptionQueue,
   riskLevel,
   withdrawableColl,
   withdrawQuote,
   WITHDRAW_TARGET,
+  type QueueTrove,
 } from './trove'
 
 const price = 80_000n * ONE // $80,000 per BTC
@@ -185,5 +188,70 @@ describe('managing an open trove', () => {
 
   it('exposes the one withdraw target every trove payment keeps', () => {
     expect(WITHDRAW_TARGET).toBe(160)
+  })
+})
+
+describe('the redemption queue', () => {
+  const mcr = percentRatio(110)
+  const me = '0x00000000000000000000000000000000000000aa' as Address
+  // nicr sets the sorted-list order (lowest goes first); icr decides whether a redemption reaches the trove at all.
+  const trove = (owner: Address, nicr: number, icr: number, debt: number): QueueTrove => ({
+    owner,
+    nicr: percentRatio(nicr),
+    icr: percentRatio(icr),
+    debt: musd(debt),
+  })
+
+  it('ranks from the bottom: the lowest nominal ratio is redeemed first', () => {
+    const queue = redemptionQueue(
+      me,
+      [
+        trove('0x00000000000000000000000000000000000000bb' as Address, 150, 150, 3_000),
+        trove(me, 130, 130, 2_000),
+        trove('0x00000000000000000000000000000000000000cc' as Address, 120, 120, 1_000),
+      ],
+      mcr,
+    )
+    // One trove sits lower in the sorted list, so this one is second of the three reachable.
+    expect(queue).toEqual({ rank: 2, total: 3, debtAhead: musd(1000) })
+  })
+
+  it('skips troves whose current ratio is under the minimum: not ahead, not counted', () => {
+    const queue = redemptionQueue(
+      me,
+      [
+        // Lower nominal ratio, but at 105% a redemption passes it by.
+        trove('0x00000000000000000000000000000000000000bb' as Address, 100, 105, 9_000),
+        trove(me, 130, 130, 2_000),
+        trove('0x00000000000000000000000000000000000000cc' as Address, 140, 109, 5_000),
+      ],
+      mcr,
+    )
+    expect(queue).toEqual({ rank: 1, total: 1, debtAhead: 0n })
+  })
+
+  it('treats a tie on nominal ratio as not ahead: the account counts as reached', () => {
+    const queue = redemptionQueue(
+      me,
+      [
+        trove('0x00000000000000000000000000000000000000bb' as Address, 130, 130, 4_000),
+        trove('0x00000000000000000000000000000000000000cc' as Address, 120, 130, 1_000),
+        trove(me, 130, 130, 2_000),
+      ],
+      mcr,
+    )
+    // Only the 120% trove is strictly lower; the 130% twin is a tie, so not ahead, though still counted.
+    expect(queue).toEqual({ rank: 2, total: 3, debtAhead: musd(1000) })
+  })
+
+  it('returns undefined when the account has no trove in the list', () => {
+    const others = [trove('0x00000000000000000000000000000000000000bb' as Address, 150, 150, 3_000)]
+    expect(redemptionQueue(me, others, mcr)).toBeUndefined()
+    expect(redemptionQueue(me, [], mcr)).toBeUndefined()
+  })
+
+  it('returns undefined when the account itself is under the minimum: redemption cannot reach it', () => {
+    const queue = redemptionQueue(me, [trove(me, 130, 105, 2_000)], mcr)
+    expect(queue).toBeUndefined()
   })
 })

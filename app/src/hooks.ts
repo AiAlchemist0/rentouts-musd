@@ -15,7 +15,7 @@ import { normalize } from 'viem/ens'
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from 'wagmi'
 import { sepolia } from 'wagmi/chains'
 import { aiArbiterAbi } from './abi/aiArbiter'
-import { borrowerOperationsAbi, hintHelpersAbi, MEZO_BORROW, priceFeedAbi, sortedTrovesAbi, troveManagerAbi } from './abi/mezo'
+import { borrowerOperationsAbi, collSurplusPoolAbi, hintHelpersAbi, MEZO_BORROW, priceFeedAbi, sortedTrovesAbi, troveManagerAbi } from './abi/mezo'
 import { erc20Abi } from './abi/erc20'
 import { humanGateAbi } from './abi/humanGate'
 import { rentEscrowAbi } from './abi/rentEscrow'
@@ -28,6 +28,7 @@ import { judgeFor, type ArbiterLog, type Ruling } from './lib/aiJudge'
 import { labelId, labelUnder, type CredentialRecords } from './lib/credential'
 import { errorMessage } from './lib/errors'
 import { tokenMetaFrom } from './lib/format'
+import { redemptionQueue, type QueueTrove, type RedemptionQueue } from './lib/trove'
 import type { HumanGateView } from './lib/humanGate'
 import { judgeNameVerified } from './lib/judgeName'
 import { recordTx } from './txLog'
@@ -856,6 +857,79 @@ export async function troveHints(
   } catch {
     return [zeroAddress, zeroAddress]
   }
+}
+
+/**
+ * Where the account's trove sits in Mezo's redemption queue, read only while the trove is active and
+ * refreshed every 60 s: every open trove's owner, then each one's nominal ratio, current ratio and entire
+ * debt in three multicalls (there are hundreds of troves, never one RPC round per trove). The result is
+ * undefined when no redemption can reach the trove. Any failure stays in the query's error state: the
+ * panel shows "unavailable" and nothing else breaks.
+ */
+/** viem's default multicall chunk is 1 KB (~15 calls); hundreds of troves need far fewer, larger eth_calls. */
+const QUEUE_BATCH_BYTES = 24_576
+
+export function useRedemptionQueue(account: Address | undefined, enabled: boolean) {
+  const client = useDemoClient()
+  return useQuery({
+    queryKey: ['mezo-redemption-queue', account],
+    enabled: isMezo && !!account && enabled,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    retry: 1,
+    queryFn: async (): Promise<RedemptionQueue | undefined> => {
+      const tm = { address: MEZO_BORROW.troveManager, abi: troveManagerAbi } as const
+      const [count, price, mcr] = await Promise.all([
+        client.readContract({ ...tm, functionName: 'getTroveOwnersCount' }),
+        client.readContract({ address: MEZO_BORROW.priceFeed, abi: priceFeedAbi, functionName: 'fetchPrice' }),
+        client.readContract({ address: MEZO_BORROW.borrowerOperations, abi: borrowerOperationsAbi, functionName: 'MCR' }),
+      ])
+      const owners = await client.multicall({
+        allowFailure: false,
+        batchSize: QUEUE_BATCH_BYTES,
+        contracts: Array.from({ length: Number(count) }, (_, i) => ({
+          ...tm,
+          functionName: 'getTroveFromTroveOwnersArray' as const,
+          args: [BigInt(i)] as const,
+        })),
+      })
+      // One multicall per figure across all owners (viem chunks them); the result shapes are asserted once here.
+      const readMany = (functionName: 'getNominalICR' | 'getCurrentICR' | 'getEntireDebtAndColl', args: (owner: Address) => [Address] | [Address, bigint]) =>
+        client.multicall({
+          allowFailure: false,
+          batchSize: QUEUE_BATCH_BYTES,
+          contracts: owners.map((owner) => ({ ...tm, functionName, args: args(owner) })),
+        }) as Promise<unknown[]>
+      const [nicrs, icrs, entire] = (await Promise.all([
+        readMany('getNominalICR', (owner) => [owner]),
+        readMany('getCurrentICR', (owner) => [owner, price]),
+        readMany('getEntireDebtAndColl', (owner) => [owner]),
+      ])) as [bigint[], bigint[], readonly (readonly bigint[])[]]
+      const troves: QueueTrove[] = owners.map((owner, i) => {
+        const [, principal, interest, , pendingPrincipal, pendingInterest] = entire[i]
+        return { owner, nicr: nicrs[i], icr: icrs[i], debt: principal + interest + pendingPrincipal + pendingInterest }
+      })
+      return redemptionQueue(account!, troves, mcr)
+    },
+  })
+}
+
+/** BTC waiting for `account` in Mezo's CollSurplusPool: what a redemption left when it closed a trove. */
+export function useCollSurplus(account: Address | undefined) {
+  const client = useDemoClient()
+  return useQuery({
+    queryKey: ['mezo-coll-surplus', account],
+    enabled: isMezo && !!account,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    queryFn: () =>
+      client.readContract({
+        address: MEZO_BORROW.collSurplusPool,
+        abi: collSurplusPoolAbi,
+        functionName: 'getCollateral',
+        args: [account!],
+      }),
+  })
 }
 
 /** MUSD held by the escrow (deposits + unreleased rent across live leases) and how many leases exist. */

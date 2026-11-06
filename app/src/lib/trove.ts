@@ -4,6 +4,7 @@
  * scaled by 1e18, and ratios scaled by 1e18 (1.5e18 = 150%).
  */
 
+import { isAddressEqual, type Address } from 'viem'
 import type { MezoProtocol, Trove } from '../hooks'
 
 export const ONE = 10n ** 18n
@@ -162,4 +163,43 @@ export function riskLevel(icr: bigint, ccr: bigint, recoveryMode: boolean): Risk
   if (icr >= percentRatio(200)) return 'safe'
   const line = recoveryMode && ccr > percentRatio(150) ? ccr : percentRatio(150)
   return icr >= line ? 'watch' : 'danger'
+}
+
+/** One trove as the redemption queue sees it: the sorted-list order (`nicr`) plus what a redemption checks. */
+export type QueueTrove = {
+  owner: Address
+  /** Nominal ratio (coll / principal), the order Mezo's sorted list keeps. */
+  nicr: bigint
+  /** Current ratio at the redemption's price; under `mcr` a redemption skips the trove. */
+  icr: bigint
+  /** MUSD owed, principal + interest including pending. */
+  debt: bigint
+}
+
+export type RedemptionQueue = {
+  /** 1-based position from the front of the queue: 1 is redeemed first. */
+  rank: number
+  /** Troves a redemption can reach at all (current ratio at or above MCR). */
+  total: number
+  /** MUSD owed by the troves ahead of this one: about what must be redeemed before it is touched. */
+  debtAhead: bigint
+}
+
+/**
+ * Where `account`'s trove sits in Mezo's redemption queue. Redemptions start from the trove with the
+ * lowest nominal ratio and walk upward, skipping any trove whose current ratio is under MCR (its risk is
+ * liquidation, not redemption). Troves tied on nominal ratio count as behind the account, so a redemption
+ * reaching that ratio has reached the account too. Undefined when the account isn't in the queue at all:
+ * no such trove, or its own ratio is under MCR.
+ */
+export function redemptionQueue(account: Address, troves: readonly QueueTrove[], mcr: bigint): RedemptionQueue | undefined {
+  const own = troves.find((t) => isAddressEqual(t.owner, account))
+  if (!own || own.icr < mcr) return undefined
+  const reachable = troves.filter((t) => t.icr >= mcr)
+  const ahead = reachable.filter((t) => t.nicr < own.nicr)
+  return {
+    rank: ahead.length + 1,
+    total: reachable.length,
+    debtAhead: ahead.reduce((sum, t) => sum + t.debt, 0n),
+  }
 }
