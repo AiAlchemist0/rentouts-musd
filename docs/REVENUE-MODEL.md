@@ -28,7 +28,7 @@ Over a 12-month lease that is 240 MUSD of revenue from one listing — for rent 
 
 These are options we may evaluate later. None is agreed, built, or promised:
 
-- **Stability Pool yield on idle deposits.** Rent sits in escrow for months; a per-lease vault could put the idle portion into Mezo's Stability Pool and share what it earns between the tenant and landlord. We fact-checked the protocol source first: see [STABILITY-POOL-CHECK.md](STABILITY-POOL-CHECK.md) — the pool pays **BTC gains from liquidations** and takes **MUSD losses**, it is not a risk-free yield, and a withdrawal gate applies while any trove is undercollateralized. Not decided.
+- **Stability Pool yield on idle deposits.** Rent sits in escrow for months; a per-lease vault could put the idle portion into Mezo's Stability Pool and share what it earns between the tenant and landlord. We fact-checked the protocol source first: see [STABILITY-POOL-CHECK.md](STABILITY-POOL-CHECK.md) — the pool pays **BTC gains from liquidations** and takes **MUSD losses**, it is not a risk-free yield, and a withdrawal gate applies while any trove is undercollateralized. Not for now: the wrong risk for a deposit the tenant must get back in full.
 - **Pay-monthly funding.** Letting tenants fund the deposit plus one period at a time instead of prepaying the whole term (the remaining Wave-2 roadmap item). Changes how much MUSD a lease holds, not how RentOuts earns.
 - **Portal features.** Listing promotion, management tooling, verified-renter credentials — ordinary marketplace revenue on the rentouts.co side.
 

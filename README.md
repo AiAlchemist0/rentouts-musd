@@ -13,7 +13,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 | **Existing product** | https://rentouts.co — long-term rental marketplace (6–24 month homes, not nightly stays) |
 | **Buildathon** | Mezo Buildathon · Wave 2 (Wave 1: Track 2, Access and Distribution) |
 | **Chain** | Mezo testnet, chain id 31611 · gas in BTC · MUSD `0x1189…c503` |
-| **Contracts** | Verified on Sourcify (exact match) · 194 Foundry tests incl. two invariant suites · 117 app tests |
+| **Contracts** | Verified on Sourcify (exact match) · 194 Foundry tests incl. two invariant suites · 163 app tests |
 | **Team** | AiAlchemist · X [@RentOuts](https://x.com/RentOuts) |
 
 ![RentOuts on Mezo: keep your bitcoin, pay your rent](docs/img/home.png)
@@ -246,7 +246,7 @@ The team’s demo leases so far, each with the transactions that prove it; [docs
 | [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #1 | monthly · team | DemoLandlordV2 [`0x8Cf3F0…53Ed`](https://explorer.test.mezo.org/address/0x8Cf3F01E8ec43791758768d72993D192A87653Ed) | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | Closed | [fund](https://explorer.test.mezo.org/tx/0xc9999b35b0f8562c9c208052ad21835efa1e1a29870c62c8f7711a215b420c76) · [pay](https://explorer.test.mezo.org/tx/0x2c0c852045df9a57a08863e4023bd675f9f25cccf8fec9ee048fb25fc4c029e3) · [close](https://explorer.test.mezo.org/tx/0x351e388cf96457804b77299351441ebfc61f0a9877ac00414d927f4285c33b1a) |
 | [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #2 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: early end by agreement | [fund](https://explorer.test.mezo.org/tx/0xb71167f14c0d61d0bed15c904643d3b7cd7358e06ccbae2c4c77dfbdefe60c99) · [propose](https://explorer.test.mezo.org/tx/0x9829ceb4957dc5912d438a6dc5b4a9049ab1aaf63a212b56d9d0538ea4344610) · [accept](https://explorer.test.mezo.org/tx/0x6dd34072ffb524cec337ba31bfe57ad0d63ac4bef4c62f644e639e0d089a8a6b) |
 | [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #3 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: dispute settled by timeout | [fund](https://explorer.test.mezo.org/tx/0xcb2e17c5d16c357a9e3e04ddbb078be57b2f33c56a04f218c9c6466acc66ab90) · [dispute](https://explorer.test.mezo.org/tx/0x07f90cae834b188f4ae7abefe04daf88af229899bd5580a88df57a7f4f037171) · [timeout](https://explorer.test.mezo.org/tx/0xc65836935d3a1c9c1dd9cca945d3ff129751e8845650e9e2d0180e886987d487) |
-| [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #4 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Active: opened by a fresh wallet’s one-transaction borrow-and-pay | [create](https://explorer.test.mezo.org/tx/0xbed9121ba99fd5b2b62fc261d0e19b306d2bd8f8eb4a16e7869176ef30ad78cd) · [borrowAndFund](https://explorer.test.mezo.org/tx/0xc3a379e0a40e2934ad61bccb1c6eed89c084310fb79a0cb2243bce12c1d20d8e) |
+| [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #4 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: opened by a fresh wallet’s one-transaction borrow-and-pay, deposit back | [create](https://explorer.test.mezo.org/tx/0xbed9121ba99fd5b2b62fc261d0e19b306d2bd8f8eb4a16e7869176ef30ad78cd) · [borrowAndFund](https://explorer.test.mezo.org/tx/0xc3a379e0a40e2934ad61bccb1c6eed89c084310fb79a0cb2243bce12c1d20d8e) · [close](https://explorer.test.mezo.org/tx/0x8780524e609bb321a4d46ee98cfe866f4c040284e0ff960ae6c3cd79da220e50) |
 
 <!-- leases-table: add rows above -->
 
@@ -276,7 +276,7 @@ The six leases above are the team’s demos. Non-team leases are added here as t
 
 **Ending a lease early needs agreement, a ruling, or the clock.** Both parties can settle an early end themselves: one proposes a split with an agreed penalty to the landlord, the other accepts, and the lease closes with no third party involved. Without agreement it goes through a dispute, which freezes what is left in escrow until it is split; rent already released stays released, and damage beyond what is left in escrow is not covered on-chain. The arbiter must stay available while a dispute is open (one key on testnet; a multisig is planned), but a dispute they never rule on can be settled by anyone after the timeout, with a fixed split: 600 seconds on testnet, 30 days planned for production.
 
-**Deposits sit idle in the escrow, and that is a choice for now.** Idle MUSD in escrow earns nothing. The obvious idea, Mezo’s Stability Pool, pays BTC gains from liquidations and takes MUSD losses, and locks withdrawals while any trove in the system is undercollateralized. We fact-checked the protocol source before treating it as an option: [docs/STABILITY-POOL-CHECK.md](docs/STABILITY-POOL-CHECK.md). Not built, and not decided.
+**Deposits sit idle in the escrow, and that is a choice for now.** Idle MUSD in escrow earns nothing. The obvious idea, Mezo’s Stability Pool, pays BTC gains from liquidations and takes MUSD losses, and locks withdrawals while any trove in the system is undercollateralized. We fact-checked the protocol source before treating it as an option: [docs/STABILITY-POOL-CHECK.md](docs/STABILITY-POOL-CHECK.md). Not for now: that is the wrong risk for a deposit the tenant must get back in full, so for Wave 2 deposits stay in the escrow and pay-monthly keeps prepaid MUSD from piling up instead.
 
 **Local rules on deposits and prepaid rent vary.** Some jurisdictions cap deposits or prepaid rent, or require deposits held in trust with interest. A production lease has to fit the local rules; this testnet escrow does not check them.
 
@@ -329,7 +329,7 @@ rentouts-musd/
 ├── .mezo/                      Mezo protocol ABIs + a raw eth_call helper
 ├── app/                        the web app (React 19, Vite, wagmi + viem)
 │   └── src/
-│       ├── panels/             Get a lease · Borrow · Pay · Run · Lease shares
+│       ├── panels/             Get a lease · Borrow · Pay · Run · Your trove · Lease shares
 │       ├── lib/trove.ts        Mezo Borrow math (ratio, collateral, liquidation, sizing)
 │       └── abi/mezo.ts         Mezo Borrow ABIs and addresses
 └── docs/                       MEZO-DEMO.md (tx log), img/ (screenshots)
@@ -349,7 +349,7 @@ App:
 ```bash
 cd app
 npm install
-npm test                       # 117 tests: trove math, receipts, deployments, copy
+npm test                       # 163 tests: trove math, receipts, deployments, copy
 npm run dev                    # http://localhost:5173 (Mezo testnet by default)
 npm run build                  # static output in app/dist
 ```

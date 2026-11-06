@@ -97,7 +97,7 @@ Terms, both leases: deposit **20 MUSD**, rent **10 MUSD per 120 s period**, **3*
 
 Amounts are read from the MUSD `Transfer` events in each settling transaction.
 
-## Wave 2 — a fresh wallet opens its trove and pays a lease in one transaction (active)
+## Wave 2 — a fresh wallet opens its trove and pays a lease in one transaction (closed)
 
 2026-11-04, same RentEscrowV2. The tenant `0xc262d36287DBe2Eda5cb3D776F9e527E24b51719` had **no trove** and no MUSD for this lease, only faucet BTC. It signed one Mezo `OpenTrove` message naming the escrow as recipient; the escrow relayed it through `BorrowerOperationsSignatures`, so a single transaction locked the BTC, opened the trove, minted the MUSD and funded the lease.
 
@@ -107,5 +107,6 @@ Terms: prepaid lease #4, deposit **20 MUSD**, rent **10 MUSD per 120 s period**,
 |---|---|---|
 | createLease(#4) | [`0xbed9121b…78cd`](https://explorer.test.mezo.org/tx/0xbed9121ba99fd5b2b62fc261d0e19b306d2bd8f8eb4a16e7869176ef30ad78cd) | Lease #4 created |
 | borrowAndFund(4, 1,800 MUSD) with 0.05 BTC | [`0xc3a379e0…0d8e`](https://explorer.test.mezo.org/tx/0xc3a379e0a40e2934ad61bccb1c6eed89c084310fb79a0cb2243bce12c1d20d8e) | Trove opened (0.05 BTC, debt 2,001.8 MUSD incl. fee and 200 MUSD gas reserve, ratio ≈ 201% at $80.5k); 1,800 MUSD minted to the escrow, 50 MUSD kept for the lease, 1,750 MUSD surplus returned to the tenant in the same transaction; `escrowBalance(4)` = 50 MUSD |
+| closeLease(4) | [`0x8780524e…0e50`](https://explorer.test.mezo.org/tx/0x8780524e609bb321a4d46ee98cfe866f4c040284e0ff960ae6c3cd79da220e50) | After the term: landlord +30 MUSD (all three periods), tenant +20 MUSD deposit back; `escrowBalance(4)` = 0 |
 
 Amounts are read from the MUSD `Transfer` events and from TroveManager after the transaction.
