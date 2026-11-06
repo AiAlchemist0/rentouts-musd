@@ -25,7 +25,7 @@ import {
   type Trove,
 } from '../hooks'
 import { errorMessage } from '../lib/errors'
-import { formatDuration, formatToken, txUrl } from '../lib/format'
+import { formatDuration, formatRounded, formatToken, txUrl } from '../lib/format'
 import { humanGateNotice } from '../lib/humanGate'
 import { MOCK_FUND_SCREEN, MOCK_VIEWER } from '../lib/mockLease'
 import { mezoSignaturesDomain, openTroveTypes, signatureDeadline } from '../lib/mezoSignatures'
@@ -279,7 +279,9 @@ function WithdrawAndPay({ lease, account, owed, onFunded, protocol, trove }: Pay
           </div>
           <div>
             <dt>Trove debt after</dt>
-            <dd>{fmt(newDebt)}</dd>
+            <dd>
+              {formatRounded(newDebt, tokenDecimals)} {tokenSymbol}
+            </dd>
           </div>
           <div>
             <dt>Collateral ratio after</dt>
