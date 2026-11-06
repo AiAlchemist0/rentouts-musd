@@ -7,9 +7,9 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 | | |
 |---|---|
 | **Live app** | **https://mezo.rentouts.co** (Mezo testnet, one wallet is enough) |
-| **Pitch deck** | [docs/RentOuts-Mezo-Wave1.pdf](docs/RentOuts-Mezo-Wave1.pdf) (10 slides) |
-| **Demo video** | **https://youtu.be/AFmjEAp-zj8** (1:55, the full loop on testnet) |
-| **At a glance** | [Five slides](#at-a-glance): the pitch, Mezo integration, one lease end to end, the business, trust |
+| **Pitch deck** | [docs/RentOuts-Mezo-Wave2.pdf](docs/RentOuts-Mezo-Wave2.pdf) (10 slides, Wave 2) · [Wave 1 deck](docs/RentOuts-Mezo-Wave1.pdf) |
+| **Demo video** | Wave 2 (2:03, one-signature borrow-and-pay, pay monthly from the trove, Your trove): link coming · Wave 1: https://youtu.be/AFmjEAp-zj8 (1:55) |
+| **At a glance** | [Five slides](#at-a-glance): the pitch, Mezo integration, one lease end to end, your trove, trust |
 | **Existing product** | https://rentouts.co — long-term rental marketplace (6–24 month homes, not nightly stays) |
 | **Buildathon** | Mezo Buildathon · Wave 2 (Wave 1: Track 2, Access and Distribution) |
 | **Chain** | Mezo testnet, chain id 31611 · gas in BTC · MUSD `0x1189…c503` |
@@ -22,7 +22,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 
 ## Contents
 
-- [Demo video](https://youtu.be/AFmjEAp-zj8) (1:55)
+- Demo video: Wave 2 link coming · [Wave 1](https://youtu.be/AFmjEAp-zj8) (1:55)
 - [At a glance](#at-a-glance)
 - [The problem](#the-problem)
 - [What we built](#what-we-built)
@@ -46,13 +46,15 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 
 ![Keep your bitcoin. Pay your rent.](docs/gallery/gallery-1.png)
 
-![Mezo Borrow, called straight from the app](docs/gallery/gallery-2.png)
+![The escrow composes with Mezo Borrow: one signature pays the lease](docs/gallery/gallery-2.png)
 
-![One lease, end to end, on Mezo](docs/gallery/gallery-3.png)
+![Sign once. The escrow does the rest, on Mezo.](docs/gallery/gallery-3.png)
 
-![A real rental marketplace, now settling in MUSD](docs/gallery/gallery-4.png)
+![Your trove, managed in the app](docs/gallery/gallery-4.png)
 
-![Open source, tested, verified, and running now](docs/gallery/gallery-5.png)
+![Tested, verified, and every ending proven on-chain](docs/gallery/gallery-5.png)
+
+The Wave 1 slides are kept in [docs/gallery/wave1](docs/gallery/wave1).
 
 ---
 
@@ -184,21 +186,19 @@ Why rent is a good use of MUSD: it is the largest recurring bill most people pay
 
 ## Screenshots
 
-Screenshots from the Wave-1 run, kept as evidence; the app has since gained monthly leases, one-transaction borrow-and-pay and the **Your trove** tab.
+From the live app on Mezo testnet (Wave 2), signed in as the demo tenant. Wave 1 screenshots are kept in [docs/img/wave1](docs/img/wave1).
 
-| 1 · Get a lease from the demo landlord | 2 · Borrow MUSD against BTC |
+| 1 · Get a lease from the demo landlord | 2 · One signature: mint from your trove and pay |
 |---|---|
-| ![Demo lease](docs/img/step1-demo-lease.png) | ![Borrow](docs/img/borrow.png) |
+| ![Get a lease](docs/img/create.png) | ![Pay from your trove](docs/img/pay.png) |
 
-| 3 · Pay deposit + rent in MUSD | 4 · Rent released, deposit back |
+| 3 · Your trove: ratio, liquidation price, repay, add or withdraw BTC | 4 · Every lease, run to its end |
 |---|---|
-| ![Pay](docs/img/step3-pay.png) | ![Closed lease](docs/img/step4-closed.png) |
+| ![Your trove](docs/img/trove.png) | ![Closed leases](docs/img/leases.png) |
 
-| A lease releasing rent during judging | Every step on the Mezo explorer |
+| Borrow MUSD against BTC | Phone |
 |---|---|
-| ![Lease #2](docs/img/live-lease.png) | ![Explorer](docs/img/explorer.png) |
-
-<p align="center"><img src="docs/img/mobile.png" alt="Mobile" width="260" /></p>
+| ![Borrow](docs/img/borrow.png) | <img src="docs/img/mobile.png" alt="Mobile" width="260" /> |
 
 ## Contracts and live evidence
 
@@ -231,7 +231,7 @@ All on Mezo testnet (chain 31611), verified on Sourcify (exact match).
 
 **Lease #1 (Wave 1)** — first MUSD lease, minted through `openTrove` (2,000 MUSD on 0.045 BTC): [`openTrove`](https://explorer.test.mezo.org/tx/0x037283b2380752c8ce1c58df1a11ebd0e2a3c8b8ca3316d2b50905ef5466917b) · [`createLease`](https://explorer.test.mezo.org/tx/0x5c8199923d447762e3328682c0018834a393ba369b8932d6b513f751184a92ed) · [`fundLease`](https://explorer.test.mezo.org/tx/0x3bd42097117b0277f2d44e90bcc07ab757c0c1e5c0d95fbd49995602eaa89690) · [`claimRent`](https://explorer.test.mezo.org/tx/0xe3dddf8d66a9a19c3fe675b2ce524a230a33c34b951409ea6394645db63302ef) · [`closeLease`](https://explorer.test.mezo.org/tx/0x0ca9fcd7661273512c8fffd0a708d51a817a0fe6878e4ef4396c62eb1cb71c87)
 
-**Lease #2 (Wave 1)** — ran through Wave 1 judging: 100 MUSD deposit, 50 MUSD / day × 14, 800 MUSD prepaid ([`createLease`](https://explorer.test.mezo.org/tx/0x2f0dd40f50ad94a28935af4acdc7802d59fd28bfa3df51a1d1d40a960ce7c9f7) · [`fundLease`](https://explorer.test.mezo.org/tx/0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532)).
+**Lease #2 (Wave 1)** — ran through Wave 1 judging, then closed at term: 100 MUSD deposit, 50 MUSD / day × 14, 800 MUSD prepaid ([`createLease`](https://explorer.test.mezo.org/tx/0x2f0dd40f50ad94a28935af4acdc7802d59fd28bfa3df51a1d1d40a960ce7c9f7) · [`fundLease`](https://explorer.test.mezo.org/tx/0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532) · [`closeLease`](https://explorer.test.mezo.org/tx/0x8385b4390950b72c70d20672c8e442d1fba12f9439bc068cddc9ec88a48dd2b6): 600 MUSD rent to the landlord, the 100 MUSD deposit back).
 
 Full transaction log: [docs/MEZO-DEMO.md](docs/MEZO-DEMO.md).
 
@@ -242,15 +242,18 @@ The team’s demo leases so far, each with the transactions that prove it; [docs
 | Escrow | Lease | Kind | Landlord | Tenant | Status | Proof |
 |---|---|---|---|---|---|---|
 | [RentEscrow · Wave 1](https://explorer.test.mezo.org/address/0xA9f09366991E6df87855F4B99025911790d4C3aF) | #1 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0x61e6E2…dce1`](https://explorer.test.mezo.org/address/0x61e6E29C48878142E25d8BeBdaDe3e584FCDdce1) | Closed | [fund](https://explorer.test.mezo.org/tx/0x3bd42097117b0277f2d44e90bcc07ab757c0c1e5c0d95fbd49995602eaa89690) · [claim](https://explorer.test.mezo.org/tx/0xe3dddf8d66a9a19c3fe675b2ce524a230a33c34b951409ea6394645db63302ef) · [close](https://explorer.test.mezo.org/tx/0x0ca9fcd7661273512c8fffd0a708d51a817a0fe6878e4ef4396c62eb1cb71c87) |
-| [RentEscrow · Wave 1](https://explorer.test.mezo.org/address/0xA9f09366991E6df87855F4B99025911790d4C3aF) | #2 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0x61e6E2…dce1`](https://explorer.test.mezo.org/address/0x61e6E29C48878142E25d8BeBdaDe3e584FCDdce1) | Ran through Wave 1 judging | [create](https://explorer.test.mezo.org/tx/0x2f0dd40f50ad94a28935af4acdc7802d59fd28bfa3df51a1d1d40a960ce7c9f7) · [fund](https://explorer.test.mezo.org/tx/0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532) |
+| [RentEscrow · Wave 1](https://explorer.test.mezo.org/address/0xA9f09366991E6df87855F4B99025911790d4C3aF) | #2 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0x61e6E2…dce1`](https://explorer.test.mezo.org/address/0x61e6E29C48878142E25d8BeBdaDe3e584FCDdce1) | Closed: ran through Wave 1 judging, deposit back | [create](https://explorer.test.mezo.org/tx/0x2f0dd40f50ad94a28935af4acdc7802d59fd28bfa3df51a1d1d40a960ce7c9f7) · [fund](https://explorer.test.mezo.org/tx/0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532) · [close](https://explorer.test.mezo.org/tx/0x8385b4390950b72c70d20672c8e442d1fba12f9439bc068cddc9ec88a48dd2b6) |
 | [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #1 | monthly · team | DemoLandlordV2 [`0x8Cf3F0…53Ed`](https://explorer.test.mezo.org/address/0x8Cf3F01E8ec43791758768d72993D192A87653Ed) | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | Closed | [fund](https://explorer.test.mezo.org/tx/0xc9999b35b0f8562c9c208052ad21835efa1e1a29870c62c8f7711a215b420c76) · [pay](https://explorer.test.mezo.org/tx/0x2c0c852045df9a57a08863e4023bd675f9f25cccf8fec9ee048fb25fc4c029e3) · [close](https://explorer.test.mezo.org/tx/0x351e388cf96457804b77299351441ebfc61f0a9877ac00414d927f4285c33b1a) |
 | [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #2 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: early end by agreement | [fund](https://explorer.test.mezo.org/tx/0xb71167f14c0d61d0bed15c904643d3b7cd7358e06ccbae2c4c77dfbdefe60c99) · [propose](https://explorer.test.mezo.org/tx/0x9829ceb4957dc5912d438a6dc5b4a9049ab1aaf63a212b56d9d0538ea4344610) · [accept](https://explorer.test.mezo.org/tx/0x6dd34072ffb524cec337ba31bfe57ad0d63ac4bef4c62f644e639e0d089a8a6b) |
 | [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #3 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: dispute settled by timeout | [fund](https://explorer.test.mezo.org/tx/0xcb2e17c5d16c357a9e3e04ddbb078be57b2f33c56a04f218c9c6466acc66ab90) · [dispute](https://explorer.test.mezo.org/tx/0x07f90cae834b188f4ae7abefe04daf88af229899bd5580a88df57a7f4f037171) · [timeout](https://explorer.test.mezo.org/tx/0xc65836935d3a1c9c1dd9cca945d3ff129751e8845650e9e2d0180e886987d487) |
 | [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #4 | prepaid · team | [`0xca46BC…33C6`](https://explorer.test.mezo.org/address/0xca46BC7646fD202F0E20e0c8CE16093A3C4D33C6) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: opened by a fresh wallet’s one-transaction borrow-and-pay, deposit back | [create](https://explorer.test.mezo.org/tx/0xbed9121ba99fd5b2b62fc261d0e19b306d2bd8f8eb4a16e7869176ef30ad78cd) · [borrowAndFund](https://explorer.test.mezo.org/tx/0xc3a379e0a40e2934ad61bccb1c6eed89c084310fb79a0cb2243bce12c1d20d8e) · [close](https://explorer.test.mezo.org/tx/0x8780524e609bb321a4d46ee98cfe866f4c040284e0ff960ae6c3cd79da220e50) |
 
+| [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #5 | monthly · team | DemoLandlordV2 [`0x8Cf3F0…53Ed`](https://explorer.test.mezo.org/address/0x8Cf3F01E8ec43791758768d72993D192A87653Ed) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: deposit + first month minted from the trove, later months from the wallet, deposit back | [withdrawAndFund](https://explorer.test.mezo.org/tx/0xdfbda55d17568511ea6707b5f875b5c6659c1bf4d6ff6835eb7fe0413a97e7ca) · [payRent](https://explorer.test.mezo.org/tx/0x46819970d548dc9ddef62982417640fb3e9bb6ad9706a707b25537fbc9ac291a) · [close](https://explorer.test.mezo.org/tx/0x26b8288e5533047c43709351d56cc6c956b5d25f0a68ee4276b3cc31ee32ce85) |
+| [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #6 | monthly · team | DemoLandlordV2 [`0x8Cf3F0…53Ed`](https://explorer.test.mezo.org/address/0x8Cf3F01E8ec43791758768d72993D192A87653Ed) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: every month minted from the trove, deposit back | [withdrawAndFund](https://explorer.test.mezo.org/tx/0x0bb483cbdf4e457bbe08dd0eab7f8ad19a881becc83d88fdf9bfb89f7105840d) · [withdrawAndPayRent](https://explorer.test.mezo.org/tx/0x0bf84e97b6b8ddacde0382efad763f06dd15cd637f9c1cce6a915bfa6ad5ca85) · [withdrawAndPayRent](https://explorer.test.mezo.org/tx/0x351578d24c85dd85b369e103bab7e18d220c76419ad204190bb6d9c6b8176c9d) · [close](https://explorer.test.mezo.org/tx/0x1cfa2822f92b5e0198b9510b6d56ea0272e31f41029b9c9ee5b3c2d83944ff0d) |
+| [RentEscrowV2](https://explorer.test.mezo.org/address/0xE9c9230DE785504c7D383EfEC46cfCa328e257e4) | #7 | monthly · team | DemoLandlordV2 [`0x8Cf3F0…53Ed`](https://explorer.test.mezo.org/address/0x8Cf3F01E8ec43791758768d72993D192A87653Ed) | [`0xc262d3…1719`](https://explorer.test.mezo.org/address/0xc262d36287DBe2Eda5cb3D776F9e527E24b51719) | Closed: the Wave 2 demo video run, every month minted from the trove, deposit back | [withdrawAndFund](https://explorer.test.mezo.org/tx/0x326f39d72eaba9555e234c53097c49168c0e34fac78e22d3e25be6db774265bd) · [withdrawAndPayRent](https://explorer.test.mezo.org/tx/0xc2f5cb36f1a84bd07981ef481f477ec3d3052ee7d87b05e8312bded514275bed) · [withdrawAndPayRent](https://explorer.test.mezo.org/tx/0x75dd6b9d8ddcd20cc0f252737a7332636aa9a8f10e1c20f19e92e5ba85b8a98f) · [close](https://explorer.test.mezo.org/tx/0x278f730bc6c91501f033d50ba7f776b60d8c46b898f24e0f746818f8e1299ae1) |
 <!-- leases-table: add rows above -->
 
-The six leases above are the team’s demos. Non-team leases are added here as they land.
+The nine leases above are the team’s demos. Non-team leases are added here as they land.
 
 ## Security model
 

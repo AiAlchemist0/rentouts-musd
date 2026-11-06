@@ -28,7 +28,7 @@ Terms: deposit **20 MUSD**, rent **10 MUSD / 60s**, **2** periods. Tenant prepai
 
 `escrowBalance(1)` = 0 after close.
 
-## Lease #2 — running through judging (active)
+## Lease #2 — ran through judging (closed)
 
 Terms: deposit **100 MUSD**, rent **50 MUSD / day**, **14** periods. Tenant prepaid 800 MUSD on 2026-10-23 07:25 UTC; the term ends 2026-11-06.
 
@@ -38,7 +38,7 @@ Terms: deposit **100 MUSD**, rent **50 MUSD / day**, **14** periods. Tenant prep
 | approve 800 MUSD | [`0x83a9e5cf…9073`](https://explorer.test.mezo.org/tx/0x83a9e5cfac8fc6048e653994f6edc739d9e87b1070eb02682e7e988b0f449073) | Tenant → escrow |
 | fundLease(2) | [`0xd1d5088b…6532`](https://explorer.test.mezo.org/tx/0xd1d5088b7956bee94ce8ca5bc85a38ff4e63fcb3e5c0bca00b0f7ba00b116532) | 800 MUSD locked |
 
-`claimable(2)` grows by one period (50 MUSD) per day. The deposit stays locked until the lease closes.
+| closeLease(2) | [`0x8385b439…d2b6`](https://explorer.test.mezo.org/tx/0x8385b4390950b72c70d20672c8e442d1fba12f9439bc068cddc9ec88a48dd2b6) | 2026-11-06, landlord, after the term: landlord +600 MUSD (the periods not yet released), tenant +100 MUSD deposit back; `escrowBalance(2)` = 0 |
 
 ## Wave 2 — a pay-monthly lease paid from the tenant's own trove (closed)
 
@@ -110,3 +110,38 @@ Terms: prepaid lease #4, deposit **20 MUSD**, rent **10 MUSD per 120 s period**,
 | closeLease(4) | [`0x8780524e…0e50`](https://explorer.test.mezo.org/tx/0x8780524e609bb321a4d46ee98cfe866f4c040284e0ff960ae6c3cd79da220e50) | After the term: landlord +30 MUSD (all three periods), tenant +20 MUSD deposit back; `escrowBalance(4)` = 0 |
 
 Amounts are read from the MUSD `Transfer` events and from TroveManager after the transaction.
+
+## Wave 2 — three more pay-monthly leases from the trove, including the demo video run (all closed)
+
+2026-11-06, RentEscrowV2, tenant `0xc262d36287DBe2Eda5cb3D776F9e527E24b51719`, landlord DemoLandlordV2. Each lease: deposit **20 MUSD**, rent **10 MUSD per 120 s period**, **3** periods, paid monthly. `withdrawAndFund` mints the deposit + first period from the tenant's trove inside the escrow call; `withdrawAndPayRent` does the same for each later period.
+
+**Lease #5** — deposit + first period from the trove; the two later periods paid late from the wallet's MUSD with plain `payRent` (allowed while the lease is active and the landlord has not claimed default).
+
+| Step | Tx | Result |
+|---|---|---|
+| requestLease (monthly) | [`0xf8d9ef68…2b1a`](https://explorer.test.mezo.org/tx/0xf8d9ef68ca14ce0574ca1cbbc261a81fc4f937498d5108f2125849cb63882b1a) | Lease #5 created |
+| withdrawAndFund(5) | [`0xdfbda55d…e7ca`](https://explorer.test.mezo.org/tx/0xdfbda55d17568511ea6707b5f875b5c6659c1bf4d6ff6835eb7fe0413a97e7ca) | 30 MUSD minted from the trove into the escrow |
+| payRent(5, 2) | [`0x46819970…291a`](https://explorer.test.mezo.org/tx/0x46819970d548dc9ddef62982417640fb3e9bb6ad9706a707b25537fbc9ac291a) | Periods 2 and 3, 20 MUSD from the wallet |
+| closeLease(5) | [`0x26b8288e…ce85`](https://explorer.test.mezo.org/tx/0x26b8288e5533047c43709351d56cc6c956b5d25f0a68ee4276b3cc31ee32ce85) | Landlord +30 MUSD, tenant +20 MUSD deposit back |
+
+**Lease #6** — every period minted from the trove.
+
+| Step | Tx | Result |
+|---|---|---|
+| requestLease (monthly) | [`0x308105b5…d446`](https://explorer.test.mezo.org/tx/0x308105b58749672de9343b284a5526c7f3bbdc3dc6141cd44a38c5096d34d446) | Lease #6 created |
+| withdrawAndFund(6) | [`0x0bb483cb…840d`](https://explorer.test.mezo.org/tx/0x0bb483cbdf4e457bbe08dd0eab7f8ad19a881becc83d88fdf9bfb89f7105840d) | Deposit + period 1 from the trove |
+| withdrawAndPayRent(6) | [`0x0bf84e97…ca85`](https://explorer.test.mezo.org/tx/0x0bf84e97b6b8ddacde0382efad763f06dd15cd637f9c1cce6a915bfa6ad5ca85) | Period 2 from the trove |
+| claimRent(6) | [`0xba5dde88…06ff`](https://explorer.test.mezo.org/tx/0xba5dde880862ca1829d2b4675a41d08733ccc342858de66a9e2b219fa96506ff) | Rent released to the landlord |
+| withdrawAndPayRent(6) | [`0x351578d2…6c9d`](https://explorer.test.mezo.org/tx/0x351578d24c85dd85b369e103bab7e18d220c76419ad204190bb6d9c6b8176c9d) | Period 3 from the trove |
+| closeLease(6) | [`0x1cfa2822…ff0d`](https://explorer.test.mezo.org/tx/0x1cfa2822f92b5e0198b9510b6d56ea0272e31f41029b9c9ee5b3c2d83944ff0d) | Remaining rent to the landlord, 20 MUSD deposit back |
+
+**Lease #7** — the Wave 2 demo video run, driven through the live app at mezo.rentouts.co.
+
+| Step | Tx | Result |
+|---|---|---|
+| requestLease (monthly) | [`0x3c29a429…6cca`](https://explorer.test.mezo.org/tx/0x3c29a42935e2ef7f6df91fd2dad8282f3395bfad3aa1f2c770755d947abe6cca) | Lease #7 created |
+| withdrawAndFund(7) | [`0x326f39d7…65bd`](https://explorer.test.mezo.org/tx/0x326f39d72eaba9555e234c53097c49168c0e34fac78e22d3e25be6db774265bd) | Deposit + period 1 from the trove |
+| withdrawAndPayRent(7) | [`0xc2f5cb36…5bed`](https://explorer.test.mezo.org/tx/0xc2f5cb36f1a84bd07981ef481f477ec3d3052ee7d87b05e8312bded514275bed) | Period 2 from the trove |
+| claimRent(7) | [`0x94b17f4b…c0f3`](https://explorer.test.mezo.org/tx/0x94b17f4b29d59cc1be062fa42452c5445c793c15613b1bc6cdf19ca4da64c0f3) | Rent released to the landlord |
+| withdrawAndPayRent(7) | [`0x75dd6b9d…a98f`](https://explorer.test.mezo.org/tx/0x75dd6b9d8ddcd20cc0f252737a7332636aa9a8f10e1c20f19e92e5ba85b8a98f) | Period 3 from the trove |
+| closeLease(7) | [`0x278f730b…9ae1`](https://explorer.test.mezo.org/tx/0x278f730bc6c91501f033d50ba7f776b60d8c46b898f24e0f746818f8e1299ae1) | Remaining rent to the landlord, 20 MUSD deposit back |
