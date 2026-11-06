@@ -1,0 +1,15 @@
+<html><head><style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;800&display=swap');
+body{margin:0;font-family:Inter,sans-serif;background:#FBFAF8;color:#171C26;width:1500px}
+.row{display:flex;gap:40px;align-items:center;padding:28px 40px;border-bottom:1px solid #eee}
+.row.dark{background:#11161d;color:#fff}
+.lbl{width:170px;font-weight:600;font-size:18px}
+.lock{display:flex;align-items:center;gap:14px;font-weight:800;font-size:44px;letter-spacing:-1.5px}
+.lock span{color:#20976C}.dark .lock span{color:#3fd29c}
+img{display:block}
+</style></head><body>
+<script>
+const c=[['A · Keyhole (original)','concept-a-keyhole.svg'],['D1 · Block house','concept-d1-block-house.svg'],['D2 · Hex house','concept-d2-hex-house.svg']];
+for(const dark of [false,true]) for(const [n,f] of c){
+ document.write(`<div class="row ${dark?'dark':''}"><div class="lbl">${n}</div><img src="${f}" width="128"><img src="${f}" width="48"><img src="${f}" width="24"><img src="${f}" width="16"><div class="lock"><img src="${f}" width="64"><div>Rent<span>Outs</span></div></div></div>`)}
+</script></body></html>

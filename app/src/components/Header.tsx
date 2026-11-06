@@ -6,9 +6,12 @@ import { shortAddress } from '../lib/format'
 
 function Logo() {
   return (
-    <svg className="logo" viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M6 15.5 16 7l10 8.5V26a1 1 0 0 1-1 1h-6v-6.5h-6V27H7a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-      <circle cx="16" cy="16" r="2" fill="currentColor" />
+    <svg className="logo" viewBox="0 0 64 64" aria-hidden="true">
+      <mask id="rentouts-logo-cut">
+        <polygon points="32,4 56.25,18 56.25,46 32,60 7.75,46 7.75,18" fill="#fff" stroke="#fff" strokeWidth="4" strokeLinejoin="round" />
+        <path d="M29.25 35.11A7.25 7.25 0 1 1 34.76 35.11L37.44 47.98H26.56Z" fill="#000" />
+      </mask>
+      <rect width="64" height="64" fill="currentColor" mask="url(#rentouts-logo-cut)" />
     </svg>
   )
 }
