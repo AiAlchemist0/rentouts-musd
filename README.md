@@ -8,7 +8,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 |---|---|
 | **Live app** | **https://mezo.rentouts.co** (Mezo testnet, one wallet is enough) |
 | **Pitch deck** | [docs/RentOuts-Mezo-Wave2.pdf](docs/RentOuts-Mezo-Wave2.pdf) (10 slides, Wave 2) · [Wave 1 deck](docs/RentOuts-Mezo-Wave1.pdf) |
-| **Demo video** | Wave 2 (2:03, one-signature borrow-and-pay, pay monthly from the trove, Your trove): link coming · Wave 1: https://youtu.be/AFmjEAp-zj8 (1:55) |
+| **Demo video** | Wave 2 (2:03, one-signature borrow-and-pay, pay monthly from the trove, Your trove): https://youtu.be/zwh1X27GUtw · Wave 1: https://youtu.be/AFmjEAp-zj8 (1:55) |
 | **At a glance** | [Five slides](#at-a-glance): the pitch, Mezo integration, one lease end to end, your trove, trust |
 | **Existing product** | https://rentouts.co — long-term rental marketplace (6–24 month homes, not nightly stays) |
 | **Buildathon** | Mezo Buildathon · Wave 2 (Wave 1: Track 2, Access and Distribution) |
@@ -22,7 +22,7 @@ Long-term rent and deposits paid in **MUSD**, Mezo’s Bitcoin-backed dollar, th
 
 ## Contents
 
-- Demo video: Wave 2 link coming · [Wave 1](https://youtu.be/AFmjEAp-zj8) (1:55)
+- Demo video: [Wave 2](https://youtu.be/zwh1X27GUtw) (2:03) · [Wave 1](https://youtu.be/AFmjEAp-zj8) (1:55)
 - [At a glance](#at-a-glance)
 - [The problem](#the-problem)
 - [What we built](#what-we-built)
