@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useContracts, useEscrowStats, useMezoProtocol } from '../hooks'
 import { formatToken } from '../lib/format'
 import { formatUsd } from '../panels/BorrowPanel'
@@ -50,8 +51,17 @@ function Stat({ label, value, sub, loading, error, onRetry }: StatProps) {
 
 /** Mezo landing: the MUSD loop in one line, plus live numbers read from the chain. */
 export function MezoHero() {
-  const { tokenDecimals } = useContracts()
+  const { tokenDecimals, escrowError } = useContracts()
+  const queryClient = useQueryClient()
   const stats = useEscrowStats()
+  // A failed escrow-config read disables the stats query (isPending + idle forever), so treat it as an
+  // error here and let Retry re-read the config, not the disabled stats query.
+  const escrowFailed = stats.isError || !!escrowError
+  const escrowLoading = stats.isPending && !escrowFailed
+  const retryEscrow = () => {
+    if (escrowError) void queryClient.refetchQueries({ queryKey: ['escrow-config'] })
+    else void stats.refetch()
+  }
   const protocol = useMezoProtocol({ seedFromCache: true })
   return (
     <section className="hero hero-mezo">
@@ -90,22 +100,22 @@ export function MezoHero() {
       <dl
         className="hero-stats"
         aria-label="Live on Mezo testnet"
-        aria-busy={(stats.isPending || protocol.isPending) || undefined}
+        aria-busy={(escrowLoading || protocol.isPending) || undefined}
       >
         {/* isError outranks data: "Unavailable" beats last visit's numbers quietly passing as live. */}
         <Stat
           label="MUSD held in lease escrow"
-          loading={stats.isPending}
-          error={stats.isError}
-          onRetry={() => stats.refetch()}
+          loading={escrowLoading}
+          error={escrowFailed}
+          onRetry={retryEscrow}
           value={stats.data ? formatToken(stats.data.locked, tokenDecimals) : undefined}
-          sub={stats.data?.locked === 0n ? 'all leases settled' : undefined}
+          sub={stats.data?.locked === 0n ? 'no MUSD held right now' : undefined}
         />
         <Stat
           label="Leases on this escrow"
-          loading={stats.isPending}
-          error={stats.isError}
-          onRetry={() => stats.refetch()}
+          loading={escrowLoading}
+          error={escrowFailed}
+          onRetry={retryEscrow}
           value={stats.data ? String(stats.data.leases) : undefined}
         />
         <Stat

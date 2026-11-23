@@ -608,8 +608,7 @@ input[type='range'] {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tx-busy::before,
-  .stat-skeleton {
+  .tx-busy::before {
     animation: none;
   }
 }
@@ -1507,6 +1506,11 @@ textarea::placeholder {
   background: linear-gradient(90deg, var(--raised) 25%, var(--line) 50%, var(--raised) 75%);
   background-size: 200% 100%;
   animation: stat-shimmer 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stat-skeleton {
+    animation: none;
+  }
 }
 @keyframes stat-shimmer {
   from {

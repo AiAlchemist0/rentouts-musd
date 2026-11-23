@@ -60,15 +60,20 @@ describe('escrow stats cache', () => {
   })
 
   it('returns null for corrupt JSON', () => {
-    const at = memoryStore({ [escrowStatsCacheKey(ESCROW)]: '{"locked":"5"' })
+    const at = memoryStore({ [`rentouts:${escrowStatsCacheKey(ESCROW)}`]: '{"locked":"5"' })
     expect(loadCachedEscrowStats(ESCROW, at)).toBeNull()
   })
 
   it('returns null when the entry is not the expected shape', () => {
-    for (const junk of ['{"locked":5,"leases":"1"}', '{"locked":"5"}', '"5"', 'null']) {
-      const at = memoryStore({ [escrowStatsCacheKey(ESCROW)]: junk })
+    for (const junk of ['{"locked":5,"leases":"1"}', '{"locked":"5"}', '{"locked":"-1","leases":"-2"}', '"5"', 'null']) {
+      const at = memoryStore({ [`rentouts:${escrowStatsCacheKey(ESCROW)}`]: junk })
       expect(loadCachedEscrowStats(ESCROW, at), junk).toBeNull()
     }
+  })
+
+  it('loads a well-formed entry written under the rentouts: key (fixtures above hit the real key)', () => {
+    const at = memoryStore({ [`rentouts:${escrowStatsCacheKey(ESCROW)}`]: '{"locked":"5","leases":"1"}' })
+    expect(loadCachedEscrowStats(ESCROW, at)).toEqual({ locked: 5n, leases: 1n })
   })
 
   it('returns null when nothing was saved', () => {

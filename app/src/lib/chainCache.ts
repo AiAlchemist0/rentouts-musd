@@ -27,9 +27,9 @@ export function serializeBigints(value: unknown): string {
   return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v))
 }
 
-/** A string this module wrote for a bigint; anything else (number, loose digits, …) rejects. */
+/** A string this module wrote for an unsigned bigint; anything else (number, negative, …) rejects. */
 function asBigint(v: unknown): bigint | undefined {
-  return typeof v === 'string' && /^-?\d+$/u.test(v) ? BigInt(v) : undefined
+  return typeof v === 'string' && /^\d+$/u.test(v) ? BigInt(v) : undefined
 }
 
 function readBigintFields(
