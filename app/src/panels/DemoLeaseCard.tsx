@@ -5,14 +5,13 @@ import { demoLandlordV2Abi } from '../abi/demoLandlord'
 import { AddressLink, TxStatus } from '../components/ui'
 import { DEMO_LANDLORD } from '../config'
 import { useContracts, useDemoClient, useTx, useWallet } from '../hooks'
+import { demoTermsQuery, knownDemoTerms } from '../lib/demoTerms'
 import { formatDuration, formatToken } from '../lib/format'
 
 function useDemoTerms(demo: Address) {
   const client = useDemoClient()
-  return useQuery({
-    queryKey: ['demo-terms', demo],
-    staleTime: Infinity,
-    queryFn: async () => {
+  return useQuery(
+    demoTermsQuery(demo, async () => {
       const at = { address: demo, abi: demoLandlordV2Abi } as const
       const [deposit, rent, period, periods, total, firstMonthly] = await client.multicall({
         allowFailure: false,
@@ -26,8 +25,8 @@ function useDemoTerms(demo: Address) {
         ],
       })
       return { deposit, rent, period, periods, total, firstMonthly }
-    },
-  })
+    }),
+  )
 }
 
 /**
@@ -46,7 +45,8 @@ function DemoLease({ demo }: { demo: Address }) {
   const terms = useDemoTerms(demo)
   const tx = useTx()
   const [leaseId, setLeaseId] = useState<bigint | null>(null)
-  const t = terms.data
+  // Immutable contract: if the background verify fails, keep showing the known terms.
+  const t = terms.data ?? knownDemoTerms(demo)
 
   async function request(monthly: boolean) {
     setLeaseId(null)
@@ -89,6 +89,13 @@ function DemoLease({ demo }: { demo: Address }) {
               ), so rent releases on its own schedule and the deposit comes back to you at the end. Prepaid costs{' '}
               {fmt(t.total)} up front; monthly starts at {fmt(t.firstMonthly)} ({fmt(t.deposit)} deposit + the first
               period) and the rest is paid period by period.
+            </>
+          ) : terms.isError ? (
+            <>
+              Couldn’t read the demo terms from the chain.{' '}
+              <button type="button" className="linkish" onClick={() => terms.refetch()}>
+                Retry
+              </button>
             </>
           ) : (
             'Reading the demo terms…'
