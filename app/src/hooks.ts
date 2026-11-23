@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getAbiItem,
   getAddress,
@@ -25,6 +25,7 @@ import { CREDENTIAL_KEYS, ENS, ENV_CONTRACTS, JUDGE_ENS_NAME } from './config'
 import { demoChain, fallbackDecimals, fallbackSymbol, isMezo, switchFirstCopy } from './network'
 import { parseAddressInput, resolveAddressInput, type ResolvedInput } from './lib/addressInput'
 import { judgeFor, type ArbiterLog, type Ruling } from './lib/aiJudge'
+import { loadCachedEscrowStats, loadCachedMezoProtocol, saveCachedEscrowStats, saveCachedMezoProtocol } from './lib/chainCache'
 import { labelId, labelUnder, type CredentialRecords } from './lib/credential'
 import { errorMessage } from './lib/errors'
 import { tokenMetaFrom } from './lib/format'
@@ -741,14 +742,20 @@ export type MezoProtocol = {
   borrowingRate: bigint
 }
 
-/** Mezo Borrow parameters and the BTC price, read together and refreshed every 30 s. */
-export function useMezoProtocol() {
+/**
+ * Mezo Borrow parameters and the BTC price, read together and refreshed every 30 s.
+ * `seedFromCache` (hero tile only) paints the last good read from a previous visit as placeholderData.
+ * Never pass it from a panel that quotes a borrow: an old price must not drive ratios or amounts.
+ */
+export function useMezoProtocol({ seedFromCache = false }: { seedFromCache?: boolean } = {}) {
   const client = useDemoClient()
+  const cached = useMemo(() => (seedFromCache ? loadCachedMezoProtocol() : null), [seedFromCache])
   return useQuery({
     queryKey: ['mezo-protocol'],
     enabled: isMezo,
     refetchInterval: 30_000,
     staleTime: 15_000,
+    placeholderData: cached ?? undefined,
     queryFn: async (): Promise<MezoProtocol> => {
       const bo = { address: MEZO_BORROW.borrowerOperations, abi: borrowerOperationsAbi } as const
       const [price, mcr, ccr, minNetDebt, gasCompensation, borrowingRate] = await client.multicall({
@@ -762,7 +769,9 @@ export function useMezoProtocol() {
           { ...bo, functionName: 'borrowingRate' },
         ],
       })
-      return { price, mcr, ccr, minNetDebt, gasCompensation, borrowingRate }
+      const protocol = { price, mcr, ccr, minNetDebt, gasCompensation, borrowingRate }
+      saveCachedMezoProtocol(protocol)
+      return protocol
     },
   })
 }
@@ -936,10 +945,15 @@ export function useCollSurplus(account: Address | undefined) {
 export function useEscrowStats() {
   const client = useDemoClient()
   const { escrow, token } = useContracts()
+  // The last good read (lib/chainCache) rides in as placeholderData, so a repeat visit paints the hero's
+  // numbers instantly and this chain read then refreshes them.
+  const cached = useMemo(() => (escrow ? loadCachedEscrowStats(escrow) : null), [escrow])
   return useQuery({
     queryKey: ['escrow-stats', escrow, token],
     enabled: !!escrow,
+    retry: 1, // hero tile only: show "Unavailable · Retry" fast instead of a long shimmer
     refetchInterval: 30_000,
+    placeholderData: cached ?? undefined,
     queryFn: async () => {
       const [locked, next] = await client.multicall({
         allowFailure: false,
@@ -948,7 +962,9 @@ export function useEscrowStats() {
           { address: escrow!, abi: activeEscrowAbi, functionName: 'nextLeaseId' },
         ],
       })
-      return { locked, leases: next - 1n }
+      const stats = { locked, leases: next - 1n }
+      saveCachedEscrowStats(stats, escrow!)
+      return stats
     },
   })
 }
